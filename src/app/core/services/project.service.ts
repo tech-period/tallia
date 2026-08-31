@@ -2,11 +2,13 @@ import { Service, computed, inject, signal } from '@angular/core';
 import { runTransaction } from '../db/database';
 import { Project } from '../db/schema';
 import { CaseRepository } from '../repositories/case.repository';
+import { CategoryRepository } from '../repositories/category.repository';
 import { InstanceRepository } from '../repositories/instance.repository';
 import { MasterImageRepository } from '../repositories/master-image.repository';
 import { MasterRepository } from '../repositories/master.repository';
 import { ProjectImageRepository } from '../repositories/project-image.repository';
 import { ProjectRepository } from '../repositories/project.repository';
+import { TagRepository } from '../repositories/tag.repository';
 import { newId, nowIso } from '../../shared/utils/id';
 import { NotFoundError } from './errors';
 import { MasterImageService } from './master-image.service';
@@ -18,10 +20,18 @@ export interface ProjectStats {
   masterCount: number;
 }
 
+/** プロジェクトメニューの各マスタに出す件数 */
+export interface ProjectMenuCounts extends ProjectStats {
+  categoryCount: number;
+  tagCount: number;
+}
+
 @Service()
 export class ProjectService {
   private readonly projects = inject(ProjectRepository);
   private readonly cases = inject(CaseRepository);
+  private readonly categories = inject(CategoryRepository);
+  private readonly tags = inject(TagRepository);
   private readonly masters = inject(MasterRepository);
   private readonly instances = inject(InstanceRepository);
   private readonly imageRecords = inject(ProjectImageRepository);
@@ -102,34 +112,44 @@ export class ProjectService {
     return updated;
   }
 
-  /** 削除確認ダイアログに出すための件数を数える */
   /** メニュー画面に出す件数。インデックスの件数だけを見てインスタンスは読み込まない */
-  async countSummary(projectId: string): Promise<ProjectStats> {
-    const [caseCount, masterCount] = await Promise.all([
+  async countSummary(projectId: string): Promise<ProjectMenuCounts> {
+    const [caseCount, masterCount, categoryCount, tagCount] = await Promise.all([
       this.cases.countByProject(projectId),
       this.masters.countByProject(projectId),
+      this.categories.countByProject(projectId),
+      this.tags.countByProject(projectId),
     ]);
-    return { caseCount, masterCount };
+    return { caseCount, masterCount, categoryCount, tagCount };
   }
 
-  async countDescendants(
-    projectId: string,
-  ): Promise<{ cases: number; masters: number; instances: number }> {
-    const [cases, masters, instances] = await Promise.all([
+  /** 削除確認ダイアログに出すための件数を数える */
+  async countDescendants(projectId: string): Promise<{
+    cases: number;
+    masters: number;
+    instances: number;
+    categories: number;
+    tags: number;
+  }> {
+    const [cases, masters, instances, categories, tags] = await Promise.all([
       this.cases.countByProject(projectId),
       this.masters.countByProject(projectId),
       this.instances.getByProject(projectId).then((list) => list.length),
+      this.categories.countByProject(projectId),
+      this.tags.countByProject(projectId),
     ]);
-    return { cases, masters, instances };
+    return { cases, masters, instances, categories, tags };
   }
 
-  /** 配下の Case / Master / Instance を含めて単一トランザクションで削除する */
+  /** 配下の Case / Category / Tag / Master / Instance を含めて単一トランザクションで削除する */
   async delete(projectId: string): Promise<void> {
     await runTransaction(async (tx) => {
       await this.instances.deleteByProject(projectId, tx);
       await this.cases.deleteByProject(projectId, tx);
       await this.masterImageRecords.deleteByProject(projectId, tx);
       await this.masters.deleteByProject(projectId, tx);
+      await this.categories.deleteByProject(projectId, tx);
+      await this.tags.deleteByProject(projectId, tx);
       await this.imageRecords.deleteByProject(projectId, tx);
       await this.projects.delete(projectId, tx);
     });

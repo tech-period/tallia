@@ -2,12 +2,24 @@ import { Service, computed, inject, signal } from '@angular/core';
 import { runTransaction } from '../db/database';
 import { Case, Instance, Master } from '../db/schema';
 import { CaseRepository } from '../repositories/case.repository';
+import { CategoryRepository } from '../repositories/category.repository';
 import { InstanceRepository } from '../repositories/instance.repository';
 import { MasterImageRepository } from '../repositories/master-image.repository';
 import { MasterRepository } from '../repositories/master.repository';
+import { TagRepository } from '../repositories/tag.repository';
 import { newId, nowIso } from '../../shared/utils/id';
 import { MasterInUseError, NotFoundError } from './errors';
 import { MasterImageService } from './master-image.service';
+
+/** オブジェクトの作成・編集で受け取る入力 */
+export interface MasterInput {
+  name: string;
+  /** → Category.id。空文字 / 未指定なら「カテゴリなし」 */
+  categoryId?: string;
+  /** → Tag.id の配列 */
+  tagIds?: readonly string[];
+  note?: string;
+}
 
 /** マスターがどのケースで何個使われているか */
 export interface MasterUsage {
@@ -19,6 +31,8 @@ export interface MasterUsage {
 @Service()
 export class MasterService {
   private readonly masters = inject(MasterRepository);
+  private readonly categories = inject(CategoryRepository);
+  private readonly tags = inject(TagRepository);
   private readonly cases = inject(CaseRepository);
   private readonly instances = inject(InstanceRepository);
   private readonly imageRecords = inject(MasterImageRepository);
@@ -35,28 +49,6 @@ export class MasterService {
   readonly loaded = this.loadedSignal.asReadonly();
   readonly projectId = this.projectIdSignal.asReadonly();
   readonly isEmpty = computed(() => this.loadedSignal() && this.mastersSignal().length === 0);
-
-  /** 絞り込み UI 用に、登録済みカテゴリを重複なく返す */
-  readonly categories = computed(() => {
-    const set = new Set<string>();
-    for (const master of this.mastersSignal()) {
-      if (master.category) {
-        set.add(master.category);
-      }
-    }
-    return [...set].sort((a, b) => a.localeCompare(b, 'ja'));
-  });
-
-  /** 絞り込み UI 用に、登録済みタグを重複なく返す */
-  readonly tags = computed(() => {
-    const set = new Set<string>();
-    for (const master of this.mastersSignal()) {
-      for (const tag of master.tags) {
-        set.add(tag);
-      }
-    }
-    return [...set].sort((a, b) => a.localeCompare(b, 'ja'));
-  });
 
   async load(projectId: string): Promise<void> {
     this.projectIdSignal.set(projectId);
@@ -76,10 +68,7 @@ export class MasterService {
     return this.masters.getById(id);
   }
 
-  async create(
-    projectId: string,
-    input: { name: string; category?: string; tags?: readonly string[]; note?: string },
-  ): Promise<Master> {
+  async create(projectId: string, input: MasterInput): Promise<Master> {
     const name = input.name.trim();
     const duplicate = await this.masters.findByName(projectId, name);
     if (duplicate) {
@@ -87,13 +76,15 @@ export class MasterService {
         `「${name}」は既に登録されています。別の名前にするか、既存のオブジェクトを編集してください。`,
       );
     }
+    const categoryId = await this.resolveCategoryId(projectId, input.categoryId);
+    const tagIds = await this.resolveTagIds(projectId, input.tagIds);
     const timestamp = nowIso();
     const created: Master = {
       id: newId(),
       projectId,
       name,
-      ...(input.category?.trim() ? { category: input.category.trim() } : {}),
-      tags: normalizeTags(input.tags),
+      ...(categoryId ? { categoryId } : {}),
+      tagIds,
       ...(input.note?.trim() ? { note: input.note.trim() } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -103,10 +94,7 @@ export class MasterService {
     return created;
   }
 
-  async update(
-    id: string,
-    changes: { name?: string; category?: string; tags?: readonly string[]; note?: string },
-  ): Promise<Master> {
+  async update(id: string, changes: Partial<MasterInput>): Promise<Master> {
     const current = await this.masters.getById(id);
     if (!current) {
       throw new NotFoundError('オブジェクト', id);
@@ -120,16 +108,16 @@ export class MasterService {
     }
 
     const updated: Master = { ...current, name, updatedAt: nowIso() };
-    if (changes.category !== undefined) {
-      const category = changes.category.trim();
-      if (category) {
-        updated.category = category;
+    if (changes.categoryId !== undefined) {
+      const categoryId = await this.resolveCategoryId(current.projectId, changes.categoryId);
+      if (categoryId) {
+        updated.categoryId = categoryId;
       } else {
-        delete updated.category;
+        delete updated.categoryId;
       }
     }
-    if (changes.tags !== undefined) {
-      updated.tags = normalizeTags(changes.tags);
+    if (changes.tagIds !== undefined) {
+      updated.tagIds = await this.resolveTagIds(current.projectId, changes.tagIds);
     }
     if (changes.note !== undefined) {
       const note = changes.note.trim();
@@ -162,20 +150,40 @@ export class MasterService {
     this.images.forget(masterId);
     await this.load(current.projectId);
   }
-}
 
-function normalizeTags(tags: readonly string[] | undefined): string[] {
-  if (!tags) {
-    return [];
-  }
-  const seen = new Set<string>();
-  for (const tag of tags) {
-    const trimmed = tag.trim();
-    if (trimmed) {
-      seen.add(trimmed);
+  /** 存在しない / 別プロジェクトのカテゴリは受け付けない。空文字は「未設定」 */
+  private async resolveCategoryId(
+    projectId: string,
+    categoryId: string | undefined,
+  ): Promise<string | undefined> {
+    if (!categoryId) {
+      return undefined;
     }
+    const category = await this.categories.getById(categoryId);
+    if (!category || category.projectId !== projectId) {
+      throw new NotFoundError('カテゴリ', categoryId);
+    }
+    return category.id;
   }
-  return [...seen];
+
+  /** 重複を除き、存在しない / 別プロジェクトのタグは落とす */
+  private async resolveTagIds(
+    projectId: string,
+    tagIds: readonly string[] | undefined,
+  ): Promise<string[]> {
+    if (!tagIds || tagIds.length === 0) {
+      return [];
+    }
+    const unique = [...new Set(tagIds.filter((id) => id))];
+    const found = await Promise.all(unique.map((id) => this.tags.getById(id)));
+    const resolved: string[] = [];
+    for (const tag of found) {
+      if (tag && tag.projectId === projectId) {
+        resolved.push(tag.id);
+      }
+    }
+    return resolved;
+  }
 }
 
 function buildUsage(

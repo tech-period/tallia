@@ -99,6 +99,8 @@ describe('ProjectService', () => {
     expect(await projects.countDescendants(project.id)).toEqual({
       cases: 2,
       masters: 1,
+      categories: 0,
+      tags: 0,
       instances: 1,
     });
   });

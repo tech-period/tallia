@@ -8,13 +8,23 @@ import { ProjectService } from '../../core/services/project.service';
 import { ConfirmDialog } from '../../shared/components/confirm-dialog';
 import { EmptyState } from '../../shared/components/empty-state';
 import { ErrorBanner } from '../../shared/components/error-banner';
+import { IconButton } from '../../shared/components/icon-button';
 import { InfoHint } from '../../shared/components/info-hint';
 import { Modal } from '../../shared/components/modal';
 import { firstErrorMessage } from '../../shared/utils/form';
 
 @Component({
   selector: 'app-case-list',
-  imports: [RouterLink, FormField, Modal, ConfirmDialog, EmptyState, ErrorBanner, InfoHint],
+  imports: [
+    RouterLink,
+    FormField,
+    Modal,
+    ConfirmDialog,
+    EmptyState,
+    ErrorBanner,
+    IconButton,
+    InfoHint,
+  ],
   templateUrl: './case-list.html',
 })
 export class CaseList {

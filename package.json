@@ -10,7 +10,8 @@
     "build:pages": "ng build --base-href /tallia/",
     "test:ci": "ng test --watch=false",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "icons": "node scripts/generate-icons.mjs"
   },
   "private": true,
   "packageManager": "npm@11.17.0",

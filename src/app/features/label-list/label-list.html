@@ -8,51 +8,55 @@
       </a>
     </li>
     <li aria-hidden="true">/</li>
-    <li class="font-medium text-slate-800">ケースマスタ</li>
+    <li class="font-medium text-slate-800">{{ text().title }}</li>
   </ol>
 </nav>
 
 <app-error-banner [message]="error()" (dismissed)="error.set(null)" />
 
 <div class="mb-5 flex items-center gap-1">
-  <h1 class="text-2xl font-bold tracking-tight">ケースマスタ</h1>
-  <app-info-hint
-    label="ケースの説明"
-    text="ダンジョン・章・周回などの単位がケースです。ケースの中に、オブジェクトの所持数を記録します。"
-  />
+  <h1 class="text-2xl font-bold tracking-tight">{{ text().title }}</h1>
+  <app-info-hint [label]="text().unit + 'の説明'" [text]="text().hint" />
 </div>
 
 @if (!loaded()) {
   <p class="text-sm text-slate-600" role="status">読み込み中…</p>
 } @else if (isEmpty()) {
   <app-empty-state
-    heading="まだケースがありません"
-    description="「1章」「地下1階」「1周目」など、記録をまとめたい単位で追加します。"
+    [heading]="'まだ' + text().unit + 'がありません'"
+    [description]="text().emptyDescription"
   >
-    <button type="button" class="btn btn-primary" (click)="openCreate()">最初のケースを追加</button>
+    <button type="button" class="btn btn-primary" (click)="openCreate()">
+      最初の{{ text().unit }}を追加
+    </button>
   </app-empty-state>
 } @else {
   <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
     <p class="text-sm text-slate-600" role="status">{{ all().length }} 件を表示中</p>
-    <button type="button" class="btn btn-primary" (click)="openCreate()">ケースを追加</button>
+    <button type="button" class="btn btn-primary" (click)="openCreate()">
+      {{ text().unit }}を追加
+    </button>
   </div>
 
   <ul class="space-y-3">
     @for (item of all(); track item.id; let first = $first, last = $last) {
       <li class="card flex items-center gap-3 p-4">
         <div class="min-w-0 grow">
-          <h2 class="text-base font-semibold">
-            <a
-              [routerLink]="['/projects', projectId(), 'overview']"
-              [queryParams]="{ open: item.id }"
-              class="rounded text-indigo-800 hover:underline"
-            >
-              {{ item.name }}
-            </a>
-          </h2>
-          <p class="mt-1 text-sm text-slate-600">合計 {{ totalFor(item.id) }} 個</p>
-          @if (item.note) {
-            <p class="mt-1 text-sm whitespace-pre-line text-slate-600">{{ item.note }}</p>
+          <h2 class="text-base font-semibold">{{ item.name }}</h2>
+          <p class="mt-1 text-sm text-slate-600">
+            使用中のオブジェクト {{ usageFor(item.id).length }} 件
+          </p>
+          @if (usageFor(item.id).length > 0) {
+            <details class="mt-2">
+              <summary class="cursor-pointer rounded text-sm font-medium text-indigo-800">
+                使用中のオブジェクトを見る
+              </summary>
+              <ul class="mt-2 space-y-1 text-sm text-slate-700">
+                @for (usage of usageFor(item.id); track usage.masterId) {
+                  <li>{{ usage.masterName }}</li>
+                }
+              </ul>
+            </details>
           }
         </div>
         <div class="flex shrink-0 items-center gap-3">
@@ -93,34 +97,21 @@
 }
 
 <app-modal [(open)]="editorOpen" [heading]="editorHeading()">
-  <form id="case-editor-form" (submit)="$event.preventDefault(); save()">
-    <div class="mb-4">
-      <label class="field-label" for="case-name">ケース名（必須）</label>
+  <form id="label-editor-form" (submit)="$event.preventDefault(); save()">
+    <div>
+      <label class="field-label" for="label-name">{{ text().unit }}名（必須）</label>
       <input
-        id="case-name"
+        id="label-name"
         class="field-input"
         type="text"
         autocomplete="off"
+        [placeholder]="text().placeholder"
         [formField]="editorForm.name"
         [attr.aria-invalid]="nameError() !== null"
-        [attr.aria-describedby]="nameError() ? 'case-name-error' : null"
+        [attr.aria-describedby]="nameError() ? 'label-name-error' : null"
       />
       @if (nameError(); as message) {
-        <p id="case-name-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
-      }
-    </div>
-    <div>
-      <label class="field-label" for="case-note">メモ（任意）</label>
-      <textarea
-        id="case-note"
-        class="field-input"
-        rows="3"
-        [formField]="editorForm.note"
-        [attr.aria-invalid]="noteError() !== null"
-        [attr.aria-describedby]="noteError() ? 'case-note-error' : null"
-      ></textarea>
-      @if (noteError(); as message) {
-        <p id="case-note-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+        <p id="label-name-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
       }
     </div>
   </form>
@@ -128,7 +119,7 @@
     <button type="button" class="btn btn-secondary" (click)="editorOpen.set(false)">
       キャンセル
     </button>
-    <button type="submit" form="case-editor-form" class="btn btn-primary" [disabled]="busy()">
+    <button type="submit" form="label-editor-form" class="btn btn-primary" [disabled]="busy()">
       保存
     </button>
   </div>
@@ -136,11 +127,8 @@
 
 <app-confirm-dialog
   [(open)]="deleteOpen"
-  heading="ケースを削除しますか？"
-  [message]="
-    '「' + (deleteTarget()?.name ?? '') + '」と、その中の記録をすべて削除します。取り消せません。'
-  "
-  [details]="deleteDetails()"
-  confirmLabel="ケースを削除する"
+  [heading]="text().unit + 'を削除しますか？'"
+  [message]="'「' + (deleteTarget()?.name ?? '') + '」を削除します。使用中のものは削除できません。'"
+  [confirmLabel]="text().unit + 'を削除する'"
   (confirmed)="confirmDelete()"
 />

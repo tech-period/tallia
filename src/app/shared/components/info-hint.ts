@@ -1,18 +1,22 @@
-import { DOCUMENT } from '@angular/common';
-import { Component, DestroyRef, ElementRef, inject, input, signal } from '@angular/core';
+import { Component, input, signal } from '@angular/core';
 
 let nextHintId = 0;
 
 /**
  * ⓘ を押したときだけ補足を出す開閉式のヒント。
  * 画面上は常時アイコンだけを置き、説明文で本文を埋めないためのもの。
+ *
+ * 表示にはネイティブの Popover API を使う。位置決め・最前面表示・
+ * 外側タップや Esc で閉じる動作はブラウザに任せ、座標計算はしない。
  */
 @Component({
   selector: 'app-info-hint',
-  host: {
-    class: 'relative inline-flex align-middle',
-    '(keydown.escape)': 'close()',
-  },
+  host: { class: 'inline-flex align-middle' },
+  styles: `
+    [popover]::backdrop {
+      background: rgb(15 23 42 / 0.15);
+    }
+  `,
   template: `
     <button
       type="button"
@@ -20,7 +24,7 @@ let nextHintId = 0;
       [attr.aria-label]="label() + 'を表示'"
       [attr.aria-expanded]="open()"
       [attr.aria-controls]="panelId"
-      (click)="toggle()"
+      [attr.popovertarget]="panelId"
     >
       <svg
         viewBox="0 0 20 20"
@@ -35,14 +39,14 @@ let nextHintId = 0;
         <circle cx="10" cy="6.4" r="0.9" fill="currentColor" stroke="none" />
       </svg>
     </button>
-    @if (open()) {
-      <div
-        [id]="panelId"
-        class="absolute top-full left-0 z-30 mt-1 w-64 max-w-[calc(100vw-3rem)] rounded-md border border-slate-300 bg-white p-3 text-left text-sm leading-relaxed font-normal whitespace-pre-line text-slate-700 shadow-lg"
-      >
-        {{ text() }}
-      </div>
-    }
+    <div
+      popover
+      [id]="panelId"
+      (toggle)="open.set($event.newState === 'open')"
+      class="m-auto max-h-[80svh] w-64 max-w-[calc(100vw-2rem)] overflow-y-auto rounded-md border border-slate-300 bg-white p-3 text-left text-sm leading-relaxed font-normal whitespace-pre-line text-slate-700 shadow-lg"
+    >
+      {{ text() }}
+    </div>
   `,
 })
 export class InfoHint {
@@ -52,29 +56,6 @@ export class InfoHint {
   readonly label = input('説明');
 
   protected readonly panelId = `info-hint-${nextHintId++}`;
-  private readonly openSignal = signal(false);
-  protected readonly open = this.openSignal.asReadonly();
-
-  private readonly host = inject(ElementRef<HTMLElement>);
-
-  constructor() {
-    // 外側をクリック・タップしたら閉じる
-    const document = inject(DOCUMENT);
-    const onPointerDown = (event: Event) => {
-      const target = event.target as Node | null;
-      if (this.openSignal() && target && !this.host.nativeElement.contains(target)) {
-        this.openSignal.set(false);
-      }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    inject(DestroyRef).onDestroy(() => document.removeEventListener('pointerdown', onPointerDown));
-  }
-
-  protected toggle(): void {
-    this.openSignal.update((open) => !open);
-  }
-
-  protected close(): void {
-    this.openSignal.set(false);
-  }
+  /** 外側タップや Esc でもブラウザが閉じるため、toggle イベントで状態を取り込む */
+  protected readonly open = signal(false);
 }

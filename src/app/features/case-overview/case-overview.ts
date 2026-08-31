@@ -3,6 +3,7 @@ import { FormField, form, min, required } from '@angular/forms/signals';
 import { Router, RouterLink } from '@angular/router';
 import { Case, Master, Project } from '../../core/db/schema';
 import { CaseService } from '../../core/services/case.service';
+import { CategoryService } from '../../core/services/category.service';
 import { toMessage } from '../../core/services/errors';
 import { InstanceRow, InstanceService } from '../../core/services/instance.service';
 import { MasterImageService } from '../../core/services/master-image.service';
@@ -33,12 +34,16 @@ import { firstErrorMessage, inputValue } from '../../shared/utils/form';
 export class CaseOverview {
   /** ルートパラメータ `/projects/:projectId/overview` */
   readonly projectId = input.required<string>();
-  /** クエリパラメータ `?open=<caseId>`。指定されたケースを開いた状態で表示する */
+  /**
+   * クエリパラメータ `?open=<caseId>`。
+   * 初期表示は全ケースを展開するため、指定されたケースも開いた状態になる。
+   */
   readonly open = input<string>();
 
   private readonly projects = inject(ProjectService);
   private readonly cases = inject(CaseService);
   private readonly masters = inject(MasterService);
+  private readonly categories = inject(CategoryService);
   private readonly instances = inject(InstanceService);
   private readonly images = inject(MasterImageService);
   private readonly router = inject(Router);
@@ -55,7 +60,7 @@ export class CaseOverview {
 
   /** 展開中のケース ID */
   private readonly expandedIds = signal<ReadonlySet<string>>(new Set());
-  /** 読み込み済みのケースの中身。展開されるまで読まない */
+  /** 読み込み済みのケースの中身 */
   private readonly rowsByCase = signal<ReadonlyMap<string, readonly InstanceRow[]>>(new Map());
   /** 初回読み込み中のケース ID */
   private readonly pendingIds = signal<ReadonlySet<string>>(new Set());
@@ -79,8 +84,9 @@ export class CaseOverview {
   constructor() {
     effect(() => {
       const id = this.projectId();
-      const open = this.open();
-      void this.load(id, open);
+      // `?open=` の値が変わったときも読み直すために参照する
+      this.open();
+      void this.load(id);
     });
   }
 
@@ -113,8 +119,12 @@ export class CaseOverview {
     return this.imageUrls().get(masterId);
   }
 
+  /** 追加候補の並びでは、同名を見分けやすいようカテゴリ名を添える */
   protected masterName(master: Master): string {
-    return master.category ? `${master.name}（${master.category}）` : master.name;
+    const category = master.categoryId
+      ? this.categories.namesById().get(master.categoryId)
+      : undefined;
+    return category ? `${master.name}（${category}）` : master.name;
   }
 
   protected toggle(target: Case): void {
@@ -205,7 +215,7 @@ export class CaseOverview {
     }
   }
 
-  /** 初回の展開時だけ「読み込み中」を出す */
+  /** 中身をまだ持っていない間だけ「読み込み中」を出す */
   private async loadRows(caseId: string): Promise<void> {
     this.pendingIds.update((ids) => new Set(ids).add(caseId));
     try {
@@ -233,7 +243,7 @@ export class CaseOverview {
     this.rowsByCase.update((map) => new Map(map).set(caseId, rows));
   }
 
-  private async load(projectId: string, open: string | undefined): Promise<void> {
+  private async load(projectId: string): Promise<void> {
     this.expandedIds.set(new Set());
     this.rowsByCase.set(new Map());
     try {
@@ -247,14 +257,15 @@ export class CaseOverview {
       await Promise.all([
         this.cases.load(projectId),
         this.masters.load(projectId),
+        // 追加候補にカテゴリ名を添えるために読む
+        this.categories.load(projectId),
         // サムネイルも `by-project` インデックスで表示中プロジェクト分だけ読む
         this.images.loadByProject(projectId),
       ]);
-      // 「使用中のケース」から飛んできた場合は、そのケースを開いた状態にする
-      if (open && this.cases.all().some((item) => item.id === open)) {
-        this.expandedIds.set(new Set([open]));
-        await this.loadRows(open);
-      }
+      // 初期表示は全ケースを展開する。`?open=<caseId>` で来た場合も同じ状態になる
+      const ids = this.cases.all().map((item) => item.id);
+      this.expandedIds.set(new Set(ids));
+      await Promise.all(ids.map((id) => this.loadRows(id)));
     } catch (error) {
       this.error.set(toMessage(error));
     }

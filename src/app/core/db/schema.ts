@@ -29,14 +29,35 @@ export interface Case {
   updatedAt: IsoDateTime;
 }
 
+/**
+ * カテゴリとタグに共通する「分類マスタ」の形。
+ * どちらもプロジェクトごとに定義し、オブジェクトからは ID で参照する。
+ */
+export interface Label {
+  id: string;
+  projectId: string;
+  name: string;
+  /** 表示順。同一プロジェクト内で連番 */
+  order: number;
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+/** オブジェクトの分類（武器 / 素材 など）。1 オブジェクトにつき 1 つ */
+export type Category = Label;
+
+/** オブジェクトに付けるしるし（レア / 換金用 など）。1 オブジェクトに複数付けられる */
+export type Tag = Label;
+
 /** そのタイトルに登場するオブジェクトの定義 */
 export interface Master {
   id: string;
   projectId: string;
   name: string;
-  /** 任意の分類（武器 / 素材 など） */
-  category?: string;
-  tags: string[];
+  /** 任意の分類（→ Category.id）。未設定なら省略する */
+  categoryId?: string;
+  /** → Tag.id の配列。空配列可 */
+  tagIds: string[];
   note?: string;
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
@@ -90,9 +111,12 @@ export interface MasterImage extends StoredImage {
 export type ImagePayload = Pick<StoredImage, 'data' | 'type' | 'width' | 'height'>;
 
 export const BACKUP_FORMAT = 'tallia-backup';
-/** オブジェクトの画像に対応した版。旧版（1: 画像なし / 2: プロジェクト画像のみ）も読み込める */
-export const BACKUP_VERSION = 3;
-export const SUPPORTED_BACKUP_VERSIONS: readonly number[] = [1, 2, 3];
+/**
+ * カテゴリ / タグのマスタ化に対応した版。旧版も読み込める
+ * （1: 画像なし / 2: プロジェクト画像のみ / 3: カテゴリ・タグが文字列）。
+ */
+export const BACKUP_VERSION = 4;
+export const SUPPORTED_BACKUP_VERSIONS: readonly number[] = [1, 2, 3, 4];
 
 /** バックアップ内の画像。JSON に載せるため base64 文字列にする */
 export interface BackupImage {
@@ -113,17 +137,78 @@ export interface BackupMasterImage extends BackupImage {
   projectId: string;
 }
 
-/** エクスポート / インポートのファイル形式 */
+/**
+ * エクスポート / インポートのファイル形式。
+ *
+ * version 3 以前の `masters` はカテゴリ / タグを文字列で持つ。読み込み時に
+ * `categories` / `tags` のレコードへ振り替える（BackupService）。
+ */
 export interface BackupFile {
   format: typeof BACKUP_FORMAT;
   version: number;
   exportedAt: IsoDateTime;
   projects: Project[];
   cases: Case[];
+  /** version 3 以前のファイルには存在しない */
+  categories?: Category[];
+  /** version 3 以前のファイルには存在しない */
+  tags?: Tag[];
   masters: Master[];
   instances: Instance[];
   /** プロジェクトの画像。version 1 のファイルには存在しない */
   images?: BackupProjectImage[];
   /** オブジェクトの画像。version 2 以前のファイルには存在しない */
   masterImages?: BackupMasterImage[];
+}
+
+/* --------------------------------------------------------------------------
+ * オブジェクトマスタの移し替え（プロジェクト間の持ち出し / 取り込み）
+ *
+ * バックアップとは目的が違うため、形式も別立てにする。
+ * 取り込み先は必ず「別のプロジェクト」なので、ID を運んでも意味を持たない。
+ * そのため ID は一切載せず、カテゴリ・タグは名前で持ち、取り込み先で名前解決する。
+ * -------------------------------------------------------------------------- */
+
+export const MASTER_FILE_FORMAT = 'tallia-masters';
+export const MASTER_FILE_VERSION = 1;
+export const SUPPORTED_MASTER_FILE_VERSIONS: readonly number[] = [1];
+/** 実体は JSON だが、他アプリで開かせないため独自の拡張子にする */
+export const MASTER_FILE_EXTENSION = '.tallia';
+
+/** 移し替えファイル内の画像。JSON に載せるため base64 文字列にする */
+export interface MasterFileImage {
+  /** base64（データ URL ではなく本体のみ） */
+  data: string;
+  type: string;
+  width: number;
+  height: number;
+}
+
+/**
+ * 移し替えファイル内の 1 オブジェクト。
+ * `category` / `tags` は ID ではなく名前。取り込み先に同名が無ければ作られる。
+ */
+export interface MasterFileEntry {
+  name: string;
+  category?: string;
+  tags: string[];
+  note?: string;
+  image?: MasterFileImage;
+}
+
+/**
+ * `.tallia` ファイルの中身。
+ *
+ * `categories` / `tags` には、どのオブジェクトからも参照されていないものも含めて
+ * プロジェクトの分類マスタを `order` 順で並べる。取り込み先での並び順を再現するため。
+ */
+export interface MasterFile {
+  format: typeof MASTER_FILE_FORMAT;
+  version: number;
+  exportedAt: IsoDateTime;
+  /** 取り込み画面に「どこから書き出したファイルか」を出すためだけの情報 */
+  source: { projectName: string };
+  categories: string[];
+  tags: string[];
+  masters: MasterFileEntry[];
 }

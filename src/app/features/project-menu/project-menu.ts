@@ -1,9 +1,9 @@
-import { Component, effect, inject, input, signal } from '@angular/core';
+import { Component, computed, effect, inject, input, signal } from '@angular/core';
 import { Router, RouterLink } from '@angular/router';
 import { Project } from '../../core/db/schema';
 import { toMessage } from '../../core/services/errors';
 import { ProjectImageService } from '../../core/services/project-image.service';
-import { ProjectService, ProjectStats } from '../../core/services/project.service';
+import { ProjectMenuCounts, ProjectService } from '../../core/services/project.service';
 import { ErrorBanner } from '../../shared/components/error-banner';
 
 @Component({
@@ -21,10 +21,44 @@ export class ProjectMenu {
 
   protected readonly project = signal<Project | null>(null);
   /** 読み込むまでは件数を出さない */
-  protected readonly counts = signal<ProjectStats | null>(null);
+  protected readonly counts = signal<ProjectMenuCounts | null>(null);
   protected readonly imageUrls = this.images.urls;
 
   protected readonly error = signal<string | null>(null);
+
+  /** マスタ系のメニューは初期状態から開いておき、畳めるようにする */
+  protected readonly mastersExpanded = signal(true);
+
+  /** 件数は読み込み前に出さないため、未取得のうちは null にする */
+  protected readonly masterLinks = computed(() => {
+    const counts = this.counts();
+    return [
+      {
+        path: 'cases',
+        name: 'ケース',
+        description: '記録をまとめる単位',
+        count: counts?.caseCount ?? null,
+      },
+      {
+        path: 'masters',
+        name: 'オブジェクト',
+        description: '個数を数える対象',
+        count: counts?.masterCount ?? null,
+      },
+      {
+        path: 'categories',
+        name: 'カテゴリ',
+        description: 'オブジェクトの分類',
+        count: counts?.categoryCount ?? null,
+      },
+      {
+        path: 'tags',
+        name: 'タグ',
+        description: 'オブジェクトの目印',
+        count: counts?.tagCount ?? null,
+      },
+    ];
+  });
 
   constructor() {
     effect(() => {

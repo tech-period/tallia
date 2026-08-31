@@ -2,9 +2,11 @@ import { TestBed } from '@angular/core/testing';
 import { resetDatabase } from '../db/db.spec-helper';
 import { InstanceRepository } from '../repositories/instance.repository';
 import { CaseService } from './case.service';
+import { CategoryService } from './category.service';
 import { InstanceService } from './instance.service';
 import { MasterService } from './master.service';
 import { ProjectService } from './project.service';
+import { TagService } from './tag.service';
 
 describe('InstanceService', () => {
   let instances: InstanceService;
@@ -109,5 +111,20 @@ describe('InstanceService', () => {
 
     expect(instances.rows()[0].masterName).toBe('鉄鉱石');
     expect(instances.totalQty()).toBe(1);
+  });
+
+  it('一覧行のカテゴリ / タグは ID ではなく名前で返す', async () => {
+    const category = await TestBed.inject(CategoryService).create(projectId, '素材');
+    const tag = await TestBed.inject(TagService).create(projectId, 'レア');
+    const master = await TestBed.inject(MasterService).create(projectId, {
+      name: '銅鉱石',
+      categoryId: category.id,
+      tagIds: [tag.id],
+    });
+    await instances.addToCase(caseId, master.id, 1);
+
+    const row = instances.rows().find((r) => r.instance.masterId === master.id);
+    expect(row?.masterCategory).toBe('素材');
+    expect(row?.masterTags).toEqual(['レア']);
   });
 });

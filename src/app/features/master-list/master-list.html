@@ -14,15 +14,21 @@
 
 <app-error-banner [message]="error()" (dismissed)="error.set(null)" />
 
-<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
-  <div class="flex items-center gap-1">
-    <h1 class="text-2xl font-bold tracking-tight">オブジェクトマスタ</h1>
-    <app-info-hint
-      label="オブジェクトの説明"
-      text="このプロジェクトに登場するアイテム・素材・モンスターなどの定義です。名前やカテゴリはここでだけ管理し、各ケースでは個数だけを記録します。"
-    />
-  </div>
-  <button type="button" class="btn btn-primary" (click)="openCreate()">オブジェクトを追加</button>
+@if (notice(); as message) {
+  <p
+    role="status"
+    class="mb-4 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+  >
+    {{ message }}
+  </p>
+}
+
+<div class="mb-5 flex items-center gap-1">
+  <h1 class="text-2xl font-bold tracking-tight">オブジェクトマスタ</h1>
+  <app-info-hint
+    label="オブジェクトの説明"
+    text="このプロジェクトに登場するアイテム・素材・モンスターなどの定義です。名前やカテゴリはここでだけ管理し、各ケースでは個数だけを記録します。カテゴリとタグはそれぞれのマスタから選びます。"
+  />
 </div>
 
 @if (!loaded()) {
@@ -37,56 +43,131 @@
     </button>
   </app-empty-state>
 } @else {
-  <div class="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
-    <div>
-      <label class="field-label" for="master-name-filter">名前で絞り込み</label>
-      <input
-        id="master-name-filter"
-        class="field-input"
-        type="search"
-        autocomplete="off"
-        [value]="nameFilter()"
-        (input)="onNameFilterInput($event)"
-      />
-    </div>
-    <div>
-      <label class="field-label" for="master-category-filter">カテゴリ</label>
-      <select
-        id="master-category-filter"
-        class="field-input"
-        [value]="categoryFilter()"
-        (change)="onCategoryFilterChange($event)"
+  <div class="card mb-4 overflow-hidden">
+    <h2>
+      <button
+        type="button"
+        class="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-slate-50"
+        [attr.aria-expanded]="filterOpen()"
+        aria-controls="master-sort-filter-panel"
+        (click)="filterOpen.set(!filterOpen())"
       >
-        <option value="">すべて</option>
-        @for (category of categories(); track category) {
-          <option [value]="category">{{ category }}</option>
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="h-5 w-5 shrink-0 text-slate-500 transition-transform"
+          [class.rotate-90]="filterOpen()"
+          aria-hidden="true"
+        >
+          <path d="m7.5 4.5 6 5.5-6 5.5" />
+        </svg>
+        <span class="grow font-semibold">並び順と絞り込み</span>
+      </button>
+    </h2>
+
+    @if (!filterOpen() && (hasFilter() || sortChip())) {
+      <div class="flex flex-wrap items-center gap-2 border-t border-slate-200 px-4 py-3">
+        @if (sortChip(); as label) {
+          <span class="chip">{{ label }}</span>
         }
-      </select>
-    </div>
-    <div>
-      <label class="field-label" for="master-tag-filter">タグ</label>
-      <select
-        id="master-tag-filter"
-        class="field-input"
-        [value]="tagFilter()"
-        (change)="onTagFilterChange($event)"
-      >
-        <option value="">すべて</option>
-        @for (tag of tags(); track tag) {
-          <option [value]="tag">{{ tag }}</option>
+        @for (chip of filterChips(); track chip.kind) {
+          <button
+            type="button"
+            class="chip-remove"
+            [attr.aria-label]="chip.text + ' の絞り込みを解除'"
+            (click)="clearFilter(chip.kind)"
+          >
+            <span class="max-w-40 truncate">{{ chip.text }}</span>
+            <span aria-hidden="true">×</span>
+          </button>
         }
-      </select>
-    </div>
-    @if (hasFilter()) {
-      <div class="sm:col-span-3">
-        <button type="button" class="btn btn-secondary" (click)="clearFilters()">
-          絞り込みを解除
-        </button>
+        @if (hasFilter()) {
+          <button
+            type="button"
+            class="rounded px-1 py-1 text-sm font-medium text-indigo-800 hover:underline"
+            (click)="clearFilters()"
+          >
+            すべて解除
+          </button>
+        }
       </div>
     }
+
+    <div
+      id="master-sort-filter-panel"
+      [hidden]="!filterOpen()"
+      class="grid gap-3 border-t border-slate-200 p-4 sm:grid-cols-3"
+    >
+      <div class="sm:col-span-3">
+        <label class="field-label" for="master-sort">並び順</label>
+        <select
+          id="master-sort"
+          class="field-input sm:max-w-60"
+          [value]="sortKey()"
+          (change)="onSortChange($event)"
+        >
+          @for (option of sortOptions; track option.key) {
+            <option [value]="option.key">{{ option.label }}</option>
+          }
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="master-name-filter">名前で絞り込み</label>
+        <input
+          id="master-name-filter"
+          class="field-input"
+          type="search"
+          autocomplete="off"
+          [value]="nameFilter()"
+          (input)="onNameFilterInput($event)"
+        />
+      </div>
+      <div>
+        <label class="field-label" for="master-category-filter">カテゴリ</label>
+        <select
+          id="master-category-filter"
+          class="field-input"
+          [value]="categoryFilter()"
+          (change)="onCategoryFilterChange($event)"
+        >
+          <option value="">すべて</option>
+          @for (category of categories(); track category.id) {
+            <option [value]="category.id">{{ category.name }}</option>
+          }
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="master-tag-filter">タグ</label>
+        <select
+          id="master-tag-filter"
+          class="field-input"
+          [value]="tagFilter()"
+          (change)="onTagFilterChange($event)"
+        >
+          <option value="">すべて</option>
+          @for (tag of tags(); track tag.id) {
+            <option [value]="tag.id">{{ tag.name }}</option>
+          }
+        </select>
+      </div>
+      @if (hasFilter()) {
+        <div class="sm:col-span-3">
+          <button type="button" class="btn btn-secondary" (click)="clearFilters()">
+            絞り込みを解除
+          </button>
+        </div>
+      }
+    </div>
   </div>
 
-  <p class="mb-3 text-sm text-slate-600" role="status">{{ filtered().length }} 件を表示中</p>
+  <div class="mb-3 flex flex-wrap items-center justify-between gap-3">
+    <p class="text-sm text-slate-600" role="status">{{ filtered().length }} 件を表示中</p>
+    <button type="button" class="btn btn-primary" (click)="openCreate()">オブジェクトを追加</button>
+  </div>
 
   @if (noMatch()) {
     <p class="card px-4 py-6 text-center text-sm text-slate-600">
@@ -94,7 +175,7 @@
     </p>
   } @else {
     <ul class="space-y-3">
-      @for (master of filtered(); track master.id) {
+      @for (master of sorted(); track master.id) {
         <li class="card p-4">
           <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="flex min-w-0 items-start gap-3">
@@ -109,10 +190,10 @@
               <div class="min-w-0">
                 <h2 class="text-base font-semibold">{{ master.name }}</h2>
                 <div class="mt-1 flex flex-wrap items-center gap-1">
-                  @if (master.category) {
-                    <span class="chip">{{ master.category }}</span>
+                  @if (categoryNameOf(master); as category) {
+                    <span class="chip">{{ category }}</span>
                   }
-                  @for (tag of master.tags; track tag) {
+                  @for (tag of tagNamesOf(master); track tag) {
                     <span class="chip">#{{ tag }}</span>
                   }
                 </div>
@@ -147,7 +228,8 @@
                 @for (usage of usageFor(master.id); track usage.caseId) {
                   <li class="flex justify-between gap-3">
                     <a
-                      [routerLink]="['/projects', projectId(), 'cases', usage.caseId]"
+                      [routerLink]="['/projects', projectId(), 'overview']"
+                      [queryParams]="{ open: usage.caseId }"
                       class="rounded text-indigo-800 hover:underline"
                     >
                       {{ usage.caseName }}
@@ -162,6 +244,151 @@
       }
     </ul>
   }
+}
+
+@if (loaded()) {
+  <section class="card mt-4 overflow-hidden">
+    <h2>
+      <button
+        type="button"
+        class="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-slate-50"
+        [attr.aria-expanded]="transferOpen()"
+        aria-controls="master-transfer-panel"
+        (click)="transferOpen.set(!transferOpen())"
+      >
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="h-5 w-5 shrink-0 text-slate-500 transition-transform"
+          [class.rotate-90]="transferOpen()"
+          aria-hidden="true"
+        >
+          <path d="m7.5 4.5 6 5.5-6 5.5" />
+        </svg>
+        <span class="grow font-semibold">別のプロジェクトとの移し替え</span>
+      </button>
+    </h2>
+
+    <div
+      id="master-transfer-panel"
+      [hidden]="!transferOpen()"
+      class="border-t border-slate-200 p-4"
+    >
+      <div class="mb-5">
+        <div class="mb-2 flex items-center gap-1">
+          <h3 class="font-medium">書き出す</h3>
+          <app-info-hint
+            label="書き出しの説明"
+            text="このプロジェクトのオブジェクトを、カテゴリ・タグ・イメージ画像ごと 1 つのファイルにまとめます。ケースと記録した個数は含まれません。"
+          />
+        </div>
+        <p class="mb-3 text-sm text-slate-600">
+          Tallia 専用のファイル（{{ fileExtension }}）として保存します。
+        </p>
+        @if (isEmpty()) {
+          <p class="text-sm text-slate-600">オブジェクトが 1 件もないため書き出せません。</p>
+        } @else {
+          <button
+            type="button"
+            class="btn btn-secondary"
+            [disabled]="busy()"
+            (click)="exportMasters()"
+          >
+            オブジェクトを書き出す
+          </button>
+        }
+      </div>
+
+      <div class="border-t border-slate-200 pt-5">
+        <div class="mb-2 flex items-center gap-1">
+          <h3 class="font-medium">取り込む</h3>
+          <app-info-hint
+            label="取り込みの説明"
+            text="他のプロジェクトから書き出したファイルを、このプロジェクトへ追加します。突き合わせはオブジェクト名で行い、同じ名前のカテゴリ・タグがなければ新しく作ります。取り込みで既存のオブジェクトが消えることはありません。"
+          />
+        </div>
+        <div class="mb-4">
+          <label class="field-label" for="master-transfer-file">ファイルを選択</label>
+          <input
+            id="master-transfer-file"
+            class="field-input"
+            type="file"
+            [attr.accept]="fileExtension + ',application/json'"
+            (change)="onTransferFileSelected($event)"
+          />
+        </div>
+
+        @if (pendingPreview(); as preview) {
+          <div
+            class="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"
+          >
+            <p class="font-medium">{{ pendingFileName() }}</p>
+            @if (pendingFile()?.source?.projectName; as from) {
+              <p class="mt-1">書き出し元: {{ from }}</p>
+            }
+            <p class="mt-1">
+              新しく追加 {{ preview.added }} 件 / 同名が既にある {{ preview.existing }} 件 / 画像
+              {{ preview.images }} 枚
+            </p>
+            @if (preview.newCategories + preview.newTags > 0) {
+              <p class="mt-1">
+                新しく作られる分類: カテゴリ {{ preview.newCategories }} 件 / タグ
+                {{ preview.newTags }} 件
+              </p>
+            }
+          </div>
+
+          @if (preview.existing > 0) {
+            <fieldset class="mb-4">
+              <legend class="field-label">同じ名前のオブジェクトがあったとき</legend>
+              <div class="space-y-2">
+                <label class="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="master-import-mode"
+                    class="mt-1"
+                    value="skip"
+                    [checked]="importMode() === 'skip'"
+                    (change)="setImportMode('skip')"
+                  />
+                  <span>
+                    <span class="font-medium">そのままにする</span>
+                    <span class="block text-slate-600">
+                      既にあるオブジェクトを残し、ファイル側は取り込まない
+                    </span>
+                  </span>
+                </label>
+                <label class="flex items-start gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name="master-import-mode"
+                    class="mt-1"
+                    value="overwrite"
+                    [checked]="importMode() === 'overwrite'"
+                    (change)="setImportMode('overwrite')"
+                  />
+                  <span>
+                    <span class="font-medium">ファイルの内容で上書き</span>
+                    <span class="block text-slate-600">
+                      カテゴリ・タグ・メモ・イメージ画像を置き換える
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </fieldset>
+          }
+
+          <button type="button" class="btn btn-primary" [disabled]="busy()" (click)="startImport()">
+            取り込む
+          </button>
+        }
+      </div>
+    </div>
+  </section>
 }
 
 <app-modal [(open)]="editorOpen" [heading]="editorHeading()">
@@ -182,31 +409,66 @@
       }
     </div>
     <div class="mb-4">
-      <label class="field-label" for="master-category">カテゴリ（任意）</label>
-      <input
-        id="master-category"
-        class="field-input"
-        type="text"
-        autocomplete="off"
-        placeholder="武器 / 素材 など"
-        [formField]="editorForm.category"
-        [attr.aria-invalid]="categoryError() !== null"
-        [attr.aria-describedby]="categoryError() ? 'master-category-error' : null"
-      />
-      @if (categoryError(); as message) {
-        <p id="master-category-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      @if (categories().length === 0) {
+        <p class="field-label">カテゴリ（任意）</p>
+        <p class="text-sm text-slate-600">
+          カテゴリがまだありません。
+          <a
+            [routerLink]="['/projects', projectId(), 'categories']"
+            class="rounded text-indigo-800 hover:underline"
+          >
+            カテゴリマスタ
+          </a>
+          で追加すると選べます。
+        </p>
+      } @else {
+        <label class="field-label" for="master-category">カテゴリ（任意）</label>
+        <select
+          id="master-category"
+          class="field-input"
+          [value]="selectedCategoryId()"
+          (change)="onCategoryChange($event)"
+        >
+          <option value="">なし</option>
+          @for (category of categories(); track category.id) {
+            <option [value]="category.id">{{ category.name }}</option>
+          }
+        </select>
       }
     </div>
     <div class="mb-4">
-      <label class="field-label" for="master-tags">タグ（任意）</label>
-      <input
-        id="master-tags"
-        class="field-input"
-        type="text"
-        autocomplete="off"
-        placeholder="レア, 換金用（カンマ区切り）"
-        [formField]="editorForm.tags"
-      />
+      <p class="field-label" id="master-tags-label">タグ（任意）</p>
+      @if (tags().length === 0) {
+        <p class="text-sm text-slate-600">
+          タグがまだありません。
+          <a
+            [routerLink]="['/projects', projectId(), 'tags']"
+            class="rounded text-indigo-800 hover:underline"
+          >
+            タグマスタ
+          </a>
+          で追加すると選べます。
+        </p>
+      } @else {
+        <div
+          role="group"
+          aria-labelledby="master-tags-label"
+          class="flex flex-wrap gap-x-4 gap-y-2"
+        >
+          @for (tag of tags(); track tag.id) {
+            <label class="flex min-h-11 items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                class="h-5 w-5 rounded border-slate-400 text-indigo-700"
+                [value]="tag.id"
+                [checked]="isTagSelected(tag.id)"
+                (change)="toggleTag(tag.id, $event)"
+              />
+              {{ tag.name }}
+            </label>
+          }
+        </div>
+      }
     </div>
     <div>
       <label class="field-label" for="master-note">メモ（任意）</label>
@@ -245,4 +507,16 @@
   [message]="'「' + (deleteTarget()?.name ?? '') + '」を削除します。使用中のものは削除できません。'"
   confirmLabel="オブジェクトを削除する"
   (confirmed)="confirmDelete()"
+/>
+
+<app-confirm-dialog
+  [(open)]="overwriteOpen"
+  heading="同じ名前のオブジェクトを上書きしますか？"
+  [message]="
+    '同じ名前のオブジェクト ' +
+    (pendingPreview()?.existing ?? 0) +
+    ' 件を、ファイルの内容で置き換えます。カテゴリ・タグ・メモ・イメージ画像が入れ替わり、取り消せません。'
+  "
+  confirmLabel="上書きして取り込む"
+  (confirmed)="confirmOverwrite()"
 />

@@ -9,6 +9,19 @@ export class MasterInUseError extends Error {
   }
 }
 
+/** カテゴリ / タグが 1 件以上のオブジェクトから参照されているため削除できない */
+export class LabelInUseError extends Error {
+  constructor(
+    /** 「カテゴリ」「タグ」など、利用者向けの呼び名 */
+    readonly entity: string,
+    readonly labelId: string,
+    readonly usageCount: number,
+  ) {
+    super(`この${entity}は ${usageCount} 件のオブジェクトで使用中のため削除できません。`);
+    this.name = 'LabelInUseError';
+  }
+}
+
 /** 参照先のレコードが存在しない */
 export class NotFoundError extends Error {
   constructor(
@@ -25,6 +38,14 @@ export class InvalidBackupError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'InvalidBackupError';
+  }
+}
+
+/** オブジェクトマスタの移し替えファイルの形式が不正 */
+export class InvalidMasterFileError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidMasterFileError';
   }
 }
 
