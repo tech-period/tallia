@@ -162,16 +162,20 @@ export interface BackupFile {
 }
 
 /* --------------------------------------------------------------------------
- * オブジェクトマスタの移し替え（プロジェクト間の持ち出し / 取り込み）
+ * マスタの移し替え（プロジェクト間の持ち出し / 取り込み）
  *
+ * 対象はマスタ 4 種（ケース / カテゴリ / タグ / オブジェクト）。
  * バックアップとは目的が違うため、形式も別立てにする。
- * 取り込み先は必ず「別のプロジェクト」なので、ID を運んでも意味を持たない。
- * そのため ID は一切載せず、カテゴリ・タグは名前で持ち、取り込み先で名前解決する。
+ *
+ * 取り込み先は必ず別のプロジェクトなので、ID を運んでも意味を持たない。
+ * そのため ID は一切載せず、突合は名前で行う。
+ * オブジェクトとカテゴリ / タグの紐付けも、ID ではなく名前で運ぶ。
  * -------------------------------------------------------------------------- */
 
 export const MASTER_FILE_FORMAT = 'tallia-masters';
-export const MASTER_FILE_VERSION = 1;
-export const SUPPORTED_MASTER_FILE_VERSIONS: readonly number[] = [1];
+/** カテゴリ / タグとの紐付けを運ぶようにした版。旧版も読み込める（1: 紐付けなし） */
+export const MASTER_FILE_VERSION = 2;
+export const SUPPORTED_MASTER_FILE_VERSIONS: readonly number[] = [1, 2];
 /** 実体は JSON だが、他アプリで開かせないため独自の拡張子にする */
 export const MASTER_FILE_EXTENSION = '.tallia';
 
@@ -184,14 +188,25 @@ export interface MasterFileImage {
   height: number;
 }
 
-/**
- * 移し替えファイル内の 1 オブジェクト。
- * `category` / `tags` は ID ではなく名前。取り込み先に同名が無ければ作られる。
- */
-export interface MasterFileEntry {
+/** ケースマスタの 1 行。表示順は配列の並びで表す */
+export interface MasterFileCase {
   name: string;
+  note?: string;
+}
+
+/**
+ * オブジェクトマスタの 1 行。
+ *
+ * カテゴリ / タグは ID ではなく名前で参照する。ここに出てくる名前は
+ * `MasterFile.categories` / `tags` にも必ず含まれる（読み込み時に補われる）。
+ * version 1 のファイルには `category` / `tags` が存在しない。
+ */
+export interface MasterFileObject {
+  name: string;
+  /** → `MasterFile.categories` の要素。未設定なら省略する */
   category?: string;
-  tags: string[];
+  /** → `MasterFile.tags` の要素。空配列可 */
+  tags?: string[];
   note?: string;
   image?: MasterFileImage;
 }
@@ -199,8 +214,9 @@ export interface MasterFileEntry {
 /**
  * `.tallia` ファイルの中身。
  *
- * `categories` / `tags` には、どのオブジェクトからも参照されていないものも含めて
- * プロジェクトの分類マスタを `order` 順で並べる。取り込み先での並び順を再現するため。
+ * `categories` / `tags` は名前だけの配列で、並びがそのまま表示順になる。
+ * どのオブジェクトからも参照されていないものも含めて全件を載せる。
+ * オブジェクトからの紐付けは、この配列に載った名前で表す。
  */
 export interface MasterFile {
   format: typeof MASTER_FILE_FORMAT;
@@ -208,7 +224,8 @@ export interface MasterFile {
   exportedAt: IsoDateTime;
   /** 取り込み画面に「どこから書き出したファイルか」を出すためだけの情報 */
   source: { projectName: string };
+  cases: MasterFileCase[];
   categories: string[];
   tags: string[];
-  masters: MasterFileEntry[];
+  masters: MasterFileObject[];
 }

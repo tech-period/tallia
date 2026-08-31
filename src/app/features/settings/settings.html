@@ -128,6 +128,182 @@
   }
 </section>
 
+<section class="card mb-5 p-4" aria-labelledby="transfer-heading">
+  <div class="mb-4 flex items-center gap-1">
+    <h2 id="transfer-heading" class="text-lg font-semibold">マスタの移し替え</h2>
+    <app-info-hint
+      label="マスタの移し替えの説明"
+      text="ケース・カテゴリ・タグ・オブジェクトの 4 つのマスタを、プロジェクト間で持ち運ぶための機能です。記録した個数は含まれません。バックアップとは別の形式のファイルを使います。"
+    />
+  </div>
+
+  <div class="mb-5">
+    <h3 class="field-label">書き出す</h3>
+    <p class="mb-3 text-sm text-slate-600">
+      選んだプロジェクトのマスタを、オブジェクトのイメージ画像ごと Tallia 専用のファイル（{{
+        fileExtension
+      }}）にまとめます。
+    </p>
+    <div class="flex flex-wrap items-end gap-3">
+      <div class="grow sm:max-w-xs">
+        <label class="field-label" for="transfer-export-project">書き出すプロジェクト</label>
+        <select
+          id="transfer-export-project"
+          class="field-input"
+          [value]="transferExportProjectId()"
+          (change)="onTransferExportProjectChange($event)"
+        >
+          <option value="">プロジェクトを選択</option>
+          @for (project of allProjects(); track project.id) {
+            <option [value]="project.id">{{ project.name }}</option>
+          }
+        </select>
+      </div>
+      <button
+        type="button"
+        class="btn btn-secondary"
+        [disabled]="transferExportProjectId() === '' || busy()"
+        (click)="exportMasters()"
+      >
+        マスタを書き出す
+      </button>
+    </div>
+  </div>
+
+  <div class="border-t border-slate-200 pt-5">
+    <h3 class="field-label">取り込む</h3>
+    <p class="mb-3 text-sm text-slate-600">
+      突き合わせは名前で行い、取り込みで既存のマスタが削除されることはありません。オブジェクトのカテゴリとタグの割り当ても、同じ名前の分類に結び直して引き継ぎます。
+    </p>
+
+    <div class="mb-4 grid gap-3 sm:grid-cols-2">
+      <div>
+        <label class="field-label" for="transfer-import-project">取り込み先のプロジェクト</label>
+        <select
+          id="transfer-import-project"
+          class="field-input"
+          [value]="transferImportProjectId()"
+          (change)="onTransferImportProjectChange($event)"
+        >
+          <option value="">プロジェクトを選択</option>
+          @for (project of allProjects(); track project.id) {
+            <option [value]="project.id">{{ project.name }}</option>
+          }
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="transfer-file">ファイルを選択</label>
+        <input
+          id="transfer-file"
+          class="field-input"
+          type="file"
+          [attr.accept]="fileExtension + ',application/json'"
+          (change)="onTransferFileSelected($event)"
+        />
+      </div>
+    </div>
+
+    @if (transferFile(); as file) {
+      <div class="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+        <p class="font-medium">{{ transferFileName() }}</p>
+        @if (file.source.projectName; as from) {
+          <p class="mt-1">書き出し元: {{ from }}</p>
+        }
+        @if (transferPreview(); as preview) {
+          <table class="mt-2 w-full max-w-sm text-left">
+            <caption class="sr-only">
+              取り込んだ場合のマスタごとの件数
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col" class="py-1 font-medium">マスタ</th>
+                <th scope="col" class="py-1 text-right font-medium">新規</th>
+                <th scope="col" class="py-1 text-right font-medium">同名あり</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row" class="py-1 font-normal">ケース</th>
+                <td class="py-1 text-right">{{ preview.added.cases }}</td>
+                <td class="py-1 text-right">{{ preview.existing.cases }}</td>
+              </tr>
+              <tr>
+                <th scope="row" class="py-1 font-normal">カテゴリ</th>
+                <td class="py-1 text-right">{{ preview.added.categories }}</td>
+                <td class="py-1 text-right">{{ preview.existing.categories }}</td>
+              </tr>
+              <tr>
+                <th scope="row" class="py-1 font-normal">タグ</th>
+                <td class="py-1 text-right">{{ preview.added.tags }}</td>
+                <td class="py-1 text-right">{{ preview.existing.tags }}</td>
+              </tr>
+              <tr>
+                <th scope="row" class="py-1 font-normal">オブジェクト</th>
+                <td class="py-1 text-right">{{ preview.added.masters }}</td>
+                <td class="py-1 text-right">{{ preview.existing.masters }}</td>
+              </tr>
+            </tbody>
+          </table>
+          @if (preview.images > 0) {
+            <p class="mt-2">イメージ画像 {{ preview.images }} 枚</p>
+          }
+        } @else {
+          <p class="mt-1">取り込み先のプロジェクトを選ぶと、件数の内訳が出ます。</p>
+        }
+      </div>
+
+      @if (transferHasExisting()) {
+        <fieldset class="mb-4">
+          <legend class="field-label">同じ名前のものがあったとき</legend>
+          <div class="space-y-2">
+            <label class="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="transfer-mode"
+                class="mt-1"
+                value="skip"
+                [checked]="transferMode() === 'skip'"
+                (change)="setTransferMode('skip')"
+              />
+              <span>
+                <span class="font-medium">そのままにする</span>
+                <span class="block text-slate-600">
+                  取り込み先のものを残し、ファイル側は取り込まない
+                </span>
+              </span>
+            </label>
+            <label class="flex items-start gap-2 text-sm">
+              <input
+                type="radio"
+                name="transfer-mode"
+                class="mt-1"
+                value="overwrite"
+                [checked]="transferMode() === 'overwrite'"
+                (change)="setTransferMode('overwrite')"
+              />
+              <span>
+                <span class="font-medium">ファイルの内容で上書き</span>
+                <span class="block text-slate-600">
+                  オブジェクトのメモ・イメージ画像・カテゴリ・タグの割り当てを、ファイルの内容に置き換える（カテゴリ・タグのマスタ自体は名前だけなので変わりません）
+                </span>
+              </span>
+            </label>
+          </div>
+        </fieldset>
+      }
+
+      <button
+        type="button"
+        class="btn btn-primary"
+        [disabled]="!transferReady() || busy()"
+        (click)="startTransferImport()"
+      >
+        マスタを取り込む
+      </button>
+    }
+  </div>
+</section>
+
 <section class="card mb-5 p-4" aria-labelledby="storage-heading">
   <h2 id="storage-heading" class="text-lg font-semibold">ストレージ</h2>
   <dl class="mt-3 space-y-3 text-sm">
@@ -234,3 +410,11 @@
     </button>
   </div>
 </app-modal>
+
+<app-confirm-dialog
+  [(open)]="transferOverwriteOpen"
+  heading="同じ名前のマスタを上書きしますか？"
+  message="ファイルと同じ名前のケース・オブジェクトについて、メモとイメージ画像をファイルの内容で置き換えます。取り消せません。"
+  confirmLabel="上書きして取り込む"
+  (confirmed)="confirmTransferOverwrite()"
+/>

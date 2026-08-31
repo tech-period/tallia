@@ -14,15 +14,6 @@
 
 <app-error-banner [message]="error()" (dismissed)="error.set(null)" />
 
-@if (notice(); as message) {
-  <p
-    role="status"
-    class="mb-4 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
-  >
-    {{ message }}
-  </p>
-}
-
 <div class="mb-5 flex items-center gap-1">
   <h1 class="text-2xl font-bold tracking-tight">オブジェクトマスタ</h1>
   <app-info-hint
@@ -246,151 +237,6 @@
   }
 }
 
-@if (loaded()) {
-  <section class="card mt-4 overflow-hidden">
-    <h2>
-      <button
-        type="button"
-        class="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-slate-50"
-        [attr.aria-expanded]="transferOpen()"
-        aria-controls="master-transfer-panel"
-        (click)="transferOpen.set(!transferOpen())"
-      >
-        <svg
-          viewBox="0 0 20 20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          class="h-5 w-5 shrink-0 text-slate-500 transition-transform"
-          [class.rotate-90]="transferOpen()"
-          aria-hidden="true"
-        >
-          <path d="m7.5 4.5 6 5.5-6 5.5" />
-        </svg>
-        <span class="grow font-semibold">別のプロジェクトとの移し替え</span>
-      </button>
-    </h2>
-
-    <div
-      id="master-transfer-panel"
-      [hidden]="!transferOpen()"
-      class="border-t border-slate-200 p-4"
-    >
-      <div class="mb-5">
-        <div class="mb-2 flex items-center gap-1">
-          <h3 class="font-medium">書き出す</h3>
-          <app-info-hint
-            label="書き出しの説明"
-            text="このプロジェクトのオブジェクトを、カテゴリ・タグ・イメージ画像ごと 1 つのファイルにまとめます。ケースと記録した個数は含まれません。"
-          />
-        </div>
-        <p class="mb-3 text-sm text-slate-600">
-          Tallia 専用のファイル（{{ fileExtension }}）として保存します。
-        </p>
-        @if (isEmpty()) {
-          <p class="text-sm text-slate-600">オブジェクトが 1 件もないため書き出せません。</p>
-        } @else {
-          <button
-            type="button"
-            class="btn btn-secondary"
-            [disabled]="busy()"
-            (click)="exportMasters()"
-          >
-            オブジェクトを書き出す
-          </button>
-        }
-      </div>
-
-      <div class="border-t border-slate-200 pt-5">
-        <div class="mb-2 flex items-center gap-1">
-          <h3 class="font-medium">取り込む</h3>
-          <app-info-hint
-            label="取り込みの説明"
-            text="他のプロジェクトから書き出したファイルを、このプロジェクトへ追加します。突き合わせはオブジェクト名で行い、同じ名前のカテゴリ・タグがなければ新しく作ります。取り込みで既存のオブジェクトが消えることはありません。"
-          />
-        </div>
-        <div class="mb-4">
-          <label class="field-label" for="master-transfer-file">ファイルを選択</label>
-          <input
-            id="master-transfer-file"
-            class="field-input"
-            type="file"
-            [attr.accept]="fileExtension + ',application/json'"
-            (change)="onTransferFileSelected($event)"
-          />
-        </div>
-
-        @if (pendingPreview(); as preview) {
-          <div
-            class="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"
-          >
-            <p class="font-medium">{{ pendingFileName() }}</p>
-            @if (pendingFile()?.source?.projectName; as from) {
-              <p class="mt-1">書き出し元: {{ from }}</p>
-            }
-            <p class="mt-1">
-              新しく追加 {{ preview.added }} 件 / 同名が既にある {{ preview.existing }} 件 / 画像
-              {{ preview.images }} 枚
-            </p>
-            @if (preview.newCategories + preview.newTags > 0) {
-              <p class="mt-1">
-                新しく作られる分類: カテゴリ {{ preview.newCategories }} 件 / タグ
-                {{ preview.newTags }} 件
-              </p>
-            }
-          </div>
-
-          @if (preview.existing > 0) {
-            <fieldset class="mb-4">
-              <legend class="field-label">同じ名前のオブジェクトがあったとき</legend>
-              <div class="space-y-2">
-                <label class="flex items-start gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="master-import-mode"
-                    class="mt-1"
-                    value="skip"
-                    [checked]="importMode() === 'skip'"
-                    (change)="setImportMode('skip')"
-                  />
-                  <span>
-                    <span class="font-medium">そのままにする</span>
-                    <span class="block text-slate-600">
-                      既にあるオブジェクトを残し、ファイル側は取り込まない
-                    </span>
-                  </span>
-                </label>
-                <label class="flex items-start gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name="master-import-mode"
-                    class="mt-1"
-                    value="overwrite"
-                    [checked]="importMode() === 'overwrite'"
-                    (change)="setImportMode('overwrite')"
-                  />
-                  <span>
-                    <span class="font-medium">ファイルの内容で上書き</span>
-                    <span class="block text-slate-600">
-                      カテゴリ・タグ・メモ・イメージ画像を置き換える
-                    </span>
-                  </span>
-                </label>
-              </div>
-            </fieldset>
-          }
-
-          <button type="button" class="btn btn-primary" [disabled]="busy()" (click)="startImport()">
-            取り込む
-          </button>
-        }
-      </div>
-    </div>
-  </section>
-}
-
 <app-modal [(open)]="editorOpen" [heading]="editorHeading()">
   <form id="master-editor-form" (submit)="$event.preventDefault(); save()">
     <div class="mb-4">
@@ -507,16 +353,4 @@
   [message]="'「' + (deleteTarget()?.name ?? '') + '」を削除します。使用中のものは削除できません。'"
   confirmLabel="オブジェクトを削除する"
   (confirmed)="confirmDelete()"
-/>
-
-<app-confirm-dialog
-  [(open)]="overwriteOpen"
-  heading="同じ名前のオブジェクトを上書きしますか？"
-  [message]="
-    '同じ名前のオブジェクト ' +
-    (pendingPreview()?.existing ?? 0) +
-    ' 件を、ファイルの内容で置き換えます。カテゴリ・タグ・メモ・イメージ画像が入れ替わり、取り消せません。'
-  "
-  confirmLabel="上書きして取り込む"
-  (confirmed)="confirmOverwrite()"
 />
