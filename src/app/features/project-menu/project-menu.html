@@ -25,37 +25,87 @@
   </div>
 </div>
 
-<nav aria-label="プロジェクトのメニュー">
-  <ul class="grid gap-3 sm:grid-cols-3">
-    <li>
-      <a
-        [routerLink]="['/projects', projectId(), 'overview']"
-        class="card flex h-full items-center p-4 text-base font-semibold text-indigo-800 transition-colors hover:bg-slate-50"
+<nav aria-label="プロジェクトのメニュー" class="space-y-3">
+  <!-- 主目的の画面なので、他のメニューより大きく目立たせる -->
+  <a
+    [routerLink]="['/projects', projectId(), 'overview']"
+    class="card flex items-center gap-4 border-indigo-200 bg-indigo-50 p-6 transition-colors hover:bg-indigo-100"
+  >
+    <span class="min-w-0 grow">
+      <span class="block text-xl font-bold text-indigo-900">レコードリスト</span>
+      <span class="mt-1 block text-sm text-indigo-900/80">
+        ケースごとにオブジェクトの個数を記録する
+      </span>
+      @if (counts(); as counts) {
+        <span class="mt-2 block text-sm font-medium text-indigo-900">
+          ケース {{ counts.caseCount }} 件・オブジェクト {{ counts.masterCount }} 件
+        </span>
+      }
+    </span>
+    <svg
+      viewBox="0 0 20 20"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      class="h-6 w-6 shrink-0 text-indigo-700"
+      aria-hidden="true"
+    >
+      <path d="m7.5 4.5 6 5.5-6 5.5" />
+    </svg>
+  </a>
+
+  <div class="card overflow-hidden">
+    <h2>
+      <button
+        type="button"
+        class="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-slate-50"
+        [attr.aria-expanded]="mastersExpanded()"
+        aria-controls="project-masters-panel"
+        (click)="mastersExpanded.set(!mastersExpanded())"
       >
-        記録一覧
-      </a>
-    </li>
-    <li>
-      <a
-        [routerLink]="['/projects', projectId(), 'cases']"
-        class="card flex h-full flex-col gap-1 p-4 transition-colors hover:bg-slate-50"
-      >
-        <span class="text-base font-semibold text-indigo-800">ケースマスタ</span>
-        @if (counts(); as counts) {
-          <span class="text-sm text-slate-600">{{ counts.caseCount }} 件</span>
+        <svg
+          viewBox="0 0 20 20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          class="h-5 w-5 shrink-0 text-slate-500 transition-transform"
+          [class.rotate-90]="mastersExpanded()"
+          aria-hidden="true"
+        >
+          <path d="m7.5 4.5 6 5.5-6 5.5" />
+        </svg>
+        <span class="min-w-0 grow">
+          <span class="block font-semibold">マスタ</span>
+          <span class="mt-0.5 block text-sm font-normal text-slate-600">
+            レコードリストで使う項目を登録する
+          </span>
+        </span>
+      </button>
+    </h2>
+
+    <div id="project-masters-panel" [hidden]="!mastersExpanded()" class="border-t border-slate-200">
+      <ul class="divide-y divide-slate-100">
+        @for (master of masterLinks(); track master.path) {
+          <li>
+            <a
+              [routerLink]="['/projects', projectId(), master.path]"
+              class="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50"
+            >
+              <span class="min-w-0 grow">
+                <span class="block text-sm font-semibold text-indigo-800">{{ master.name }}</span>
+                <span class="mt-0.5 block text-sm text-slate-600">{{ master.description }}</span>
+              </span>
+              @if (master.count !== null) {
+                <span class="chip shrink-0">{{ master.count }} 件</span>
+              }
+            </a>
+          </li>
         }
-      </a>
-    </li>
-    <li>
-      <a
-        [routerLink]="['/projects', projectId(), 'masters']"
-        class="card flex h-full flex-col gap-1 p-4 transition-colors hover:bg-slate-50"
-      >
-        <span class="text-base font-semibold text-indigo-800">オブジェクトマスタ</span>
-        @if (counts(); as counts) {
-          <span class="text-sm text-slate-600">{{ counts.masterCount }} 件</span>
-        }
-      </a>
-    </li>
-  </ul>
+      </ul>
+    </div>
+  </div>
 </nav>

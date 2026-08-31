@@ -19,7 +19,7 @@ export const routes: Routes = [
   },
   {
     path: 'projects/:projectId/overview',
-    title: '記録一覧 | Tallia',
+    title: 'レコードリスト | Tallia',
     loadComponent: () =>
       import('./features/case-overview/case-overview').then((m) => m.CaseOverview),
   },
@@ -29,9 +29,17 @@ export const routes: Routes = [
     loadComponent: () => import('./features/case-list/case-list').then((m) => m.CaseList),
   },
   {
-    path: 'projects/:projectId/cases/:caseId',
-    title: 'ケース詳細 | Tallia',
-    loadComponent: () => import('./features/case-detail/case-detail').then((m) => m.CaseDetail),
+    path: 'projects/:projectId/categories',
+    title: 'カテゴリマスタ | Tallia',
+    // 画面は共通で、`kind` だけを変えて使い分ける（withComponentInputBinding で input に届く）
+    data: { kind: 'category' },
+    loadComponent: () => import('./features/label-list/label-list').then((m) => m.LabelList),
+  },
+  {
+    path: 'projects/:projectId/tags',
+    title: 'タグマスタ | Tallia',
+    data: { kind: 'tag' },
+    loadComponent: () => import('./features/label-list/label-list').then((m) => m.LabelList),
   },
   {
     path: 'projects/:projectId/masters',

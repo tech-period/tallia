@@ -8,20 +8,26 @@ import {
   BackupMasterImage,
   BackupProjectImage,
   Case,
+  Category,
   Instance,
+  Label,
   Master,
   MasterImage,
   Project,
   ProjectImage,
   StoredImage,
   SUPPORTED_BACKUP_VERSIONS,
+  Tag,
 } from '../db/schema';
 import { CaseRepository } from '../repositories/case.repository';
+import { CategoryRepository } from '../repositories/category.repository';
 import { InstanceRepository } from '../repositories/instance.repository';
 import { MasterImageRepository } from '../repositories/master-image.repository';
 import { MasterRepository } from '../repositories/master.repository';
 import { ProjectImageRepository } from '../repositories/project-image.repository';
 import { ProjectRepository } from '../repositories/project.repository';
+import { TagRepository } from '../repositories/tag.repository';
+import { downloadText, sanitizeForFileName, timestampForFileName } from '../../shared/utils/file';
 import { newId, nowIso } from '../../shared/utils/id';
 import { base64ToBytes, bytesToBase64 } from '../../shared/utils/image';
 import { InvalidBackupError, NotFoundError } from './errors';
@@ -34,6 +40,8 @@ export type ImportMode = 'append' | 'replace';
 export interface ImportResult {
   projects: number;
   cases: number;
+  categories: number;
+  tags: number;
   masters: number;
   instances: number;
   /** プロジェクトの画像 */
@@ -46,6 +54,8 @@ export interface ImportResult {
 export class BackupService {
   private readonly projects = inject(ProjectRepository);
   private readonly cases = inject(CaseRepository);
+  private readonly categories = inject(CategoryRepository);
+  private readonly tags = inject(TagRepository);
   private readonly masters = inject(MasterRepository);
   private readonly instances = inject(InstanceRepository);
   private readonly imageRecords = inject(ProjectImageRepository);
@@ -55,15 +65,27 @@ export class BackupService {
 
   /** 全プロジェクトを 1 ファイルに書き出す */
   async exportAll(): Promise<BackupFile> {
-    const [projects, cases, masters, instances, images, masterImages] = await Promise.all([
-      this.projects.getAll(),
-      this.allCases(),
-      this.allMasters(),
-      this.allInstances(),
-      this.imageRecords.getAll(),
-      this.masterImageRecords.getAll(),
-    ]);
-    return this.toBackup(projects, cases, masters, instances, images, masterImages);
+    const [projects, cases, categories, tags, masters, instances, images, masterImages] =
+      await Promise.all([
+        this.projects.getAll(),
+        this.allCases(),
+        this.categories.getAll(),
+        this.tags.getAll(),
+        this.allMasters(),
+        this.allInstances(),
+        this.imageRecords.getAll(),
+        this.masterImageRecords.getAll(),
+      ]);
+    return this.toBackup({
+      projects,
+      cases,
+      categories,
+      tags,
+      masters,
+      instances,
+      images,
+      masterImages,
+    });
   }
 
   /** 指定プロジェクトに属するレコードだけを書き出す */
@@ -72,14 +94,25 @@ export class BackupService {
     if (!project) {
       throw new NotFoundError('プロジェクト', projectId);
     }
-    const [cases, masters, instances, image, masterImages] = await Promise.all([
+    const [cases, categories, tags, masters, instances, image, masterImages] = await Promise.all([
       this.cases.getByProject(projectId),
+      this.categories.getByProject(projectId),
+      this.tags.getByProject(projectId),
       this.masters.getByProject(projectId),
       this.instances.getByProject(projectId),
       this.imageRecords.getByProject(projectId),
       this.masterImageRecords.getByProject(projectId),
     ]);
-    return this.toBackup([project], cases, masters, instances, image ? [image] : [], masterImages);
+    return this.toBackup({
+      projects: [project],
+      cases,
+      categories,
+      tags,
+      masters,
+      instances,
+      images: image ? [image] : [],
+      masterImages,
+    });
   }
 
   /** `tallia-{YYYYMMDD-HHmmss}.json` 形式のファイル名を組み立てる */
@@ -91,21 +124,9 @@ export class BackupService {
     return `tallia-${stamp}.json`;
   }
 
-  /** Blob を作りダウンロードさせる。Object URL は必ず解放する */
+  /** Blob を作りダウンロードさせる */
   download(backup: BackupFile, fileName: string): void {
-    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    try {
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = fileName;
-      anchor.rel = 'noopener';
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-    } finally {
-      URL.revokeObjectURL(url);
-    }
+    downloadText(JSON.stringify(backup, null, 2), fileName, 'application/json');
   }
 
   /** JSON 文字列を検証して `BackupFile` にする */
@@ -148,6 +169,13 @@ export class BackupService {
     if (candidate.images !== undefined && !Array.isArray(candidate.images)) {
       throw new InvalidBackupError('バックアップの構造が壊れています（images）。');
     }
+    // カテゴリ / タグは version 3 以前には存在しない
+    if (candidate.categories !== undefined && !Array.isArray(candidate.categories)) {
+      throw new InvalidBackupError('バックアップの構造が壊れています（categories）。');
+    }
+    if (candidate.tags !== undefined && !Array.isArray(candidate.tags)) {
+      throw new InvalidBackupError('バックアップの構造が壊れています（tags）。');
+    }
 
     return {
       format: BACKUP_FORMAT,
@@ -155,6 +183,8 @@ export class BackupService {
       exportedAt: candidate.exportedAt ?? nowIso(),
       projects: candidate.projects,
       cases: candidate.cases,
+      categories: candidate.categories ?? [],
+      tags: candidate.tags ?? [],
       masters: candidate.masters,
       instances: candidate.instances,
       images: candidate.images ?? [],
@@ -168,7 +198,9 @@ export class BackupService {
    * `replace` は既存の全データを削除してから投入する。
    */
   async import(backup: BackupFile, mode: ImportMode): Promise<ImportResult> {
-    const payload = mode === 'append' ? remapIds(backup) : backup;
+    // 旧版のファイルはカテゴリ / タグが文字列なので、先にレコードへ振り替える
+    const migrated = migrateLegacyLabels(backup);
+    const payload = mode === 'append' ? remapIds(migrated) : migrated;
     // トランザクションは待機している間に自動コミットされるため、
     // base64 のデコードは開始前に済ませておく
     const images = decodeProjectImages(payload.images ?? []);
@@ -178,6 +210,8 @@ export class BackupService {
       if (mode === 'replace') {
         await this.projects.clear(tx);
         await this.cases.clear(tx);
+        await this.categories.clear(tx);
+        await this.tags.clear(tx);
         await this.masters.clear(tx);
         await this.instances.clear(tx);
         await this.imageRecords.clear(tx);
@@ -188,6 +222,12 @@ export class BackupService {
       }
       for (const c of payload.cases) {
         await this.cases.put(c, tx);
+      }
+      for (const category of payload.categories ?? []) {
+        await this.categories.put(category, tx);
+      }
+      for (const tag of payload.tags ?? []) {
+        await this.tags.put(tag, tx);
       }
       for (const master of payload.masters) {
         await this.masters.put(master, tx);
@@ -211,6 +251,8 @@ export class BackupService {
     return {
       projects: payload.projects.length,
       cases: payload.cases.length,
+      categories: payload.categories?.length ?? 0,
+      tags: payload.tags?.length ?? 0,
       masters: payload.masters.length,
       instances: payload.instances.length,
       images: images.length,
@@ -223,6 +265,8 @@ export class BackupService {
     await runTransaction(async (tx) => {
       await this.instances.clear(tx);
       await this.cases.clear(tx);
+      await this.categories.clear(tx);
+      await this.tags.clear(tx);
       await this.masters.clear(tx);
       await this.imageRecords.clear(tx);
       await this.masterImageRecords.clear(tx);
@@ -232,20 +276,25 @@ export class BackupService {
     this.masterImages.forgetAll();
   }
 
-  private toBackup(
-    projects: Project[],
-    cases: Case[],
-    masters: Master[],
-    instances: Instance[],
-    images: ProjectImage[],
-    masterImages: MasterImage[],
-  ): BackupFile {
+  private toBackup(source: {
+    projects: Project[];
+    cases: Case[];
+    categories: Category[];
+    tags: Tag[];
+    masters: Master[];
+    instances: Instance[];
+    images: ProjectImage[];
+    masterImages: MasterImage[];
+  }): BackupFile {
+    const { projects, cases, categories, tags, masters, instances, images, masterImages } = source;
     return {
       format: BACKUP_FORMAT,
       version: BACKUP_VERSION,
       exportedAt: nowIso(),
       projects,
       cases,
+      categories,
+      tags,
       masters,
       instances,
       images: images.map((image) => ({ projectId: image.projectId, ...encodeImage(image) })),
@@ -277,13 +326,74 @@ export class BackupService {
 }
 
 /**
- * 全 ID を新規採番し、外部キー（projectId / caseId / masterId）も
+ * version 3 以前のバックアップは、カテゴリ / タグを Master に文字列で持っている。
+ * プロジェクトごとに同じ名前を 1 レコードへまとめ、Master 側は ID 参照へ書き換える。
+ * version 4 以降のファイルは既にレコードを持つため、そのまま通る。
+ */
+function migrateLegacyLabels(backup: BackupFile): BackupFile {
+  const categories: Category[] = [...(backup.categories ?? [])];
+  const tags: Tag[] = [...(backup.tags ?? [])];
+  const timestamp = nowIso();
+  const known = new Map<string, string>();
+
+  /** `projectId` + 名前ごとに 1 件だけ作り、その ID を返す */
+  const labelId = (list: Label[], kind: string, projectId: string, name: string): string => {
+    const key = `${kind}\u0000${projectId}\u0000${name}`;
+    const existing = known.get(key);
+    if (existing) {
+      return existing;
+    }
+    const order = list.filter((label) => label.projectId === projectId).length;
+    const label: Label = {
+      id: newId(),
+      projectId,
+      name,
+      order,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    list.push(label);
+    known.set(key, label.id);
+    return label.id;
+  };
+
+  const masters: Master[] = [];
+  for (const raw of backup.masters as LegacyBackupMaster[]) {
+    const { category, tags: legacyTags, ...rest } = raw;
+    const master: Master = { ...rest, tagIds: [...(rest.tagIds ?? [])] };
+    const categoryName = category?.trim();
+    if (!master.categoryId && categoryName) {
+      master.categoryId = labelId(categories, 'category', master.projectId, categoryName);
+    }
+    for (const legacy of legacyTags ?? []) {
+      const name = legacy.trim();
+      if (!name) {
+        continue;
+      }
+      const id = labelId(tags, 'tag', master.projectId, name);
+      if (!master.tagIds.includes(id)) {
+        master.tagIds.push(id);
+      }
+    }
+    masters.push(master);
+  }
+
+  return { ...backup, categories, tags, masters };
+}
+
+/** version 3 以前の Master。カテゴリとタグを文字列で持っていた */
+type LegacyBackupMaster = Master & { category?: string; tags?: string[] };
+
+/**
+ * 全 ID を新規採番し、外部キー（projectId / caseId / masterId / categoryId / tagIds）も
  * 新旧 ID の対応表で一貫して差し替える。参照が壊れるレコードは取り込まない。
  */
 function remapIds(backup: BackupFile): BackupFile {
   const projectIds = new Map(backup.projects.map((p) => [p.id, newId()]));
   const caseIds = new Map(backup.cases.map((c) => [c.id, newId()]));
   const masterIds = new Map(backup.masters.map((m) => [m.id, newId()]));
+  const categoryIds = new Map((backup.categories ?? []).map((c) => [c.id, newId()]));
+  const tagIds = new Map((backup.tags ?? []).map((t) => [t.id, newId()]));
 
   const projects = backup.projects.map((p) => ({ ...p, id: projectIds.get(p.id) as string }));
 
@@ -296,13 +406,30 @@ function remapIds(backup: BackupFile): BackupFile {
     }
   }
 
+  const categories = remapLabels(backup.categories ?? [], categoryIds, projectIds);
+  const tags = remapLabels(backup.tags ?? [], tagIds, projectIds);
+
   const masters: Master[] = [];
   for (const m of backup.masters) {
     const projectId = projectIds.get(m.projectId);
     const id = masterIds.get(m.id);
-    if (projectId && id) {
-      masters.push({ ...m, id, projectId, tags: m.tags ?? [] });
+    if (!projectId || !id) {
+      continue;
     }
+    const master: Master = {
+      ...m,
+      id,
+      projectId,
+      // 参照先が無いカテゴリ / タグは落とし、オブジェクト自体は取り込む
+      tagIds: (m.tagIds ?? []).map((tagId) => tagIds.get(tagId)).filter(isPresent),
+    };
+    const categoryId = m.categoryId ? categoryIds.get(m.categoryId) : undefined;
+    if (categoryId) {
+      master.categoryId = categoryId;
+    } else {
+      delete master.categoryId;
+    }
+    masters.push(master);
   }
 
   const images: BackupProjectImage[] = [];
@@ -332,7 +459,28 @@ function remapIds(backup: BackupFile): BackupFile {
     }
   }
 
-  return { ...backup, projects, cases, masters, instances, images, masterImages };
+  return { ...backup, projects, cases, categories, tags, masters, instances, images, masterImages };
+}
+
+/** 分類マスタの ID と projectId を対応表で差し替える */
+function remapLabels(
+  labels: readonly Label[],
+  labelIds: ReadonlyMap<string, string>,
+  projectIds: ReadonlyMap<string, string>,
+): Label[] {
+  const remapped: Label[] = [];
+  for (const label of labels) {
+    const projectId = projectIds.get(label.projectId);
+    const id = labelIds.get(label.id);
+    if (projectId && id) {
+      remapped.push({ ...label, id, projectId });
+    }
+  }
+  return remapped;
+}
+
+function isPresent(value: string | undefined): value is string {
+  return value !== undefined;
 }
 
 /** 保存済みの画像を JSON に載せられる形にする */
@@ -386,16 +534,4 @@ function decodeMasterImages(images: readonly BackupMasterImage[]): MasterImage[]
     }
   }
   return decoded;
-}
-
-function timestampForFileName(date: Date): string {
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return (
-    `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}` +
-    `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
-  );
-}
-
-function sanitizeForFileName(name: string): string {
-  return name.replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 60) || 'project';
 }

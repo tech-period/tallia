@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Tallia">
+  <title>Tallia</title>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1" />
+      <stop offset="1" stop-color="#4c1d95" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112.64" fill="url(#g)" />
+  <g fill="#ffffff">
+    <rect x="126.46" y="117.76" width="34.82" height="276.48" />
+    <rect x="201.22" y="117.76" width="34.82" height="276.48" />
+    <rect x="275.97" y="117.76" width="34.82" height="276.48" />
+    <rect x="350.72" y="117.76" width="34.82" height="276.48" />
+    <rect x="98.30" y="236.03" width="315.39" height="39.94" transform="rotate(-20 256.00 256.00)" />
+  </g>
+</svg>

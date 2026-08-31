@@ -2,12 +2,14 @@ import { Service, computed, inject, signal } from '@angular/core';
 import { runTransaction } from '../db/database';
 import { Instance } from '../db/schema';
 import { CaseRepository } from '../repositories/case.repository';
+import { CategoryRepository } from '../repositories/category.repository';
 import { InstanceRepository } from '../repositories/instance.repository';
 import { MasterRepository } from '../repositories/master.repository';
+import { TagRepository } from '../repositories/tag.repository';
 import { newId, nowIso } from '../../shared/utils/id';
 import { NotFoundError } from './errors';
 
-/** 一覧表示用に、Instance にマスター情報を添えたもの */
+/** 一覧表示用に、Instance にマスター情報を添えたもの。分類は名前に解決して持つ */
 export interface InstanceRow {
   instance: Instance;
   masterName: string;
@@ -19,6 +21,8 @@ export interface InstanceRow {
 export class InstanceService {
   private readonly instances = inject(InstanceRepository);
   private readonly masters = inject(MasterRepository);
+  private readonly categories = inject(CategoryRepository);
+  private readonly tags = inject(TagRepository);
   private readonly cases = inject(CaseRepository);
 
   private readonly caseIdSignal = signal<string | null>(null);
@@ -45,18 +49,29 @@ export class InstanceService {
    * ケース展開ビューのように複数ケースを同時に扱う画面から使う。
    */
   async rowsForCase(caseId: string, projectId: string): Promise<readonly InstanceRow[]> {
-    const [instances, masters] = await Promise.all([
+    const [instances, masters, categories, tags] = await Promise.all([
       this.instances.getByCase(caseId),
       this.masters.getByProject(projectId),
+      this.categories.getByProject(projectId),
+      this.tags.getByProject(projectId),
     ]);
     const byId = new Map(masters.map((m) => [m.id, m]));
+    // 表示は名前で行うため、ここで ID を名前に解決する
+    const categoryNames = new Map(categories.map((c) => [c.id, c.name]));
+    const tagOrder = new Map(tags.map((t) => [t.id, t.order]));
+    const tagNames = new Map(tags.map((t) => [t.id, t.name]));
     const rows: InstanceRow[] = instances.map((instance) => {
       const master = byId.get(instance.masterId);
+      const category = master?.categoryId ? categoryNames.get(master.categoryId) : undefined;
+      const masterTags = (master?.tagIds ?? [])
+        .filter((id) => tagNames.has(id))
+        .sort((a, b) => (tagOrder.get(a) ?? 0) - (tagOrder.get(b) ?? 0))
+        .map((id) => tagNames.get(id) as string);
       return {
         instance,
         masterName: master?.name ?? '(削除されたオブジェクト)',
-        ...(master?.category ? { masterCategory: master.category } : {}),
-        masterTags: master?.tags ?? [],
+        ...(category ? { masterCategory: category } : {}),
+        masterTags,
       };
     });
     rows.sort((a, b) => a.masterName.localeCompare(b.masterName, 'ja'));

@@ -58,8 +58,18 @@
     @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40;
   }
 
+  /* 主操作より一段控えめなアイコンボタン。枠と地色を持たず 36px 角だけ確保する */
+  .btn-icon-quiet {
+    @apply inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-transparent bg-transparent text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-slate-500;
+  }
+
   .btn-icon-danger {
     @apply border-red-200 text-red-800 hover:border-red-300 hover:bg-red-50;
+  }
+
+  /* 数量の増減ボタンと役割が違うことを見た目で分けるための塗りつぶし円形 */
+  .btn-icon-fill {
+    @apply rounded-full border-indigo-700 bg-indigo-700 text-white hover:bg-indigo-800 disabled:hover:bg-indigo-700;
   }
 
   .btn-info {
@@ -80,5 +90,10 @@
 
   .chip {
     @apply inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700;
+  }
+
+  /* 押すとその条件だけ外れるチップ。指で押せるよう縦 32px を確保する */
+  .chip-remove {
+    @apply inline-flex min-h-8 items-center gap-1.5 rounded-full border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100;
   }
 }

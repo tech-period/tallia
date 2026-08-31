@@ -130,6 +130,7 @@ export class ProjectList {
       this.deleteDetails.set([
         `ケース ${counts.cases} 件`,
         `オブジェクト ${counts.masters} 件`,
+        `カテゴリ ${counts.categories} 件・タグ ${counts.tags} 件`,
         `記録 ${counts.instances} 件`,
       ]);
       this.deleteOpen.set(true);

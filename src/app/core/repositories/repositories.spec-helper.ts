@@ -1,4 +1,4 @@
-import { Case, Instance, Master, Project } from '../db/schema';
+import { Case, Instance, Label, Master, Project } from '../db/schema';
 
 const TIMESTAMP = '2026-08-31T12:00:00.000Z';
 
@@ -11,7 +11,12 @@ export function makeCase(id: string, projectId: string, order = 0): Case {
 }
 
 export function makeMaster(id: string, projectId: string, name = `master-${id}`): Master {
-  return { id, projectId, name, tags: [], createdAt: TIMESTAMP, updatedAt: TIMESTAMP };
+  return { id, projectId, name, tagIds: [], createdAt: TIMESTAMP, updatedAt: TIMESTAMP };
+}
+
+/** カテゴリ / タグはどちらも同じ形なので 1 つのヘルパーで作る */
+export function makeLabel(id: string, projectId: string, name = `label-${id}`, order = 0): Label {
+  return { id, projectId, name, order, createdAt: TIMESTAMP, updatedAt: TIMESTAMP };
 }
 
 export function makeInstance(

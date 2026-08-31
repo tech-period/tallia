@@ -59,12 +59,18 @@
 
 ```
 Project（ゲームタイトル）
+  ├─ Category（オブジェクトの分類。1 オブジェクトにつき 1 つ）
+  ├─ Tag（オブジェクトに付けるしるし。1 オブジェクトに複数）
   ├─ Master（そのタイトルに登場するオブジェクトの定義）
+  │     ├─ categoryId → Category
+  │     └─ tagIds[]   → Tag
   └─ Case（記録の単位：ダンジョン、章、周回など）
         └─ Instance（そのケースに何がいくつあるか）
 ```
 
 - **Master** はオブジェクトの「種類」を定義する。名前や共通属性はここにのみ持つ
+- **Category / Tag** もプロジェクトごとのマスタ。Master からは名前ではなく **ID で参照**する。
+  名前を変えても参照が保たれ、表記ゆれも起きない
 - **Instance** は「どのケースに、どのマスターが、いくつあるか」を表す
 - Instance は **数量型**。同一ケース内の同一マスターは 1 レコードに集約し `qty` で数を持つ
 - 全エンティティをフラットに保持し、親子関係は外部キー + インデックスで表現する。
@@ -96,12 +102,25 @@ export interface Case {
   updatedAt: IsoDateTime;
 }
 
+/** Category と Tag に共通する「分類マスタ」の形 */
+export interface Label {
+  id: string;
+  projectId: string; // → Project.id
+  name: string; // 同一プロジェクト内で一意
+  order: number; // 表示順。同一プロジェクト内で連番
+  createdAt: IsoDateTime;
+  updatedAt: IsoDateTime;
+}
+
+export type Category = Label; // 武器 / 素材 など
+export type Tag = Label; // レア / 換金用 など
+
 export interface Master {
   id: string;
   projectId: string; // → Project.id
   name: string;
-  category?: string; // 任意の分類（武器 / 素材 など）
-  tags: string[]; // 空配列可
+  categoryId?: string; // → Category.id。未設定なら省略
+  tagIds: string[]; // → Tag.id の配列。空配列可
   note?: string;
   createdAt: IsoDateTime;
   updatedAt: IsoDateTime;
@@ -125,30 +144,48 @@ IndexedDB は `Date` を保存できるが、JSON エクスポート時に変換
 ### 3.3 IndexedDB スキーマ
 
 - データベース名: `tallia`
-- 初期バージョン: `1`
+- 現行バージョン: `4`
 
-| ストア      | keyPath | インデックス                                                                                                                      |
-| ----------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `projects`  | `id`    | なし                                                                                                                              |
-| `cases`     | `id`    | `by-project` (`projectId`)                                                                                                        |
-| `masters`   | `id`    | `by-project` (`projectId`)<br>`by-project-name` (`[projectId, name]`)                                                             |
-| `instances` | `id`    | `by-project` (`projectId`)<br>`by-case` (`caseId`)<br>`by-master` (`masterId`)<br>`by-case-master` (`[caseId, masterId]`, unique) |
+| ストア          | keyPath     | インデックス                                                                                                                      |
+| --------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `projects`      | `id`        | なし                                                                                                                              |
+| `cases`         | `id`        | `by-project` (`projectId`)                                                                                                        |
+| `categories`    | `id`        | `by-project` (`projectId`)<br>`by-project-name` (`[projectId, name]`)                                                             |
+| `tags`          | `id`        | `by-project` (`projectId`)<br>`by-project-name` (`[projectId, name]`)                                                             |
+| `masters`       | `id`        | `by-project` (`projectId`)<br>`by-project-name` (`[projectId, name]`)                                                             |
+| `instances`     | `id`        | `by-project` (`projectId`)<br>`by-case` (`caseId`)<br>`by-master` (`masterId`)<br>`by-case-master` (`[caseId, masterId]`, unique) |
+| `projectImages` | `projectId` | なし                                                                                                                              |
+| `masterImages`  | `masterId`  | `by-project` (`projectId`)                                                                                                        |
 
 `by-case-master` は **unique 制約付き**。数量型の一意性をストア側で担保する。
+名前の一意性（`by-project-name`）はストアでは強制せず、Service 層で検証する
+（壊れたバックアップの取り込みで、インポート全体が落ちるのを避けるため）。
 
-`upgrade` コールバック内でストアとインデックスをすべて定義すること。
-後からインデックスを追加する場合は DB バージョンを上げる必要があるため、
-上記は初期バージョンで全部作る。
+`upgrade` は既存 DB からの移行も通るため、`oldVersion` で段階的に適用する。
+
+| バージョン | 変更                                                            |
+| ---------- | --------------------------------------------------------------- |
+| 1          | `projects` / `cases` / `masters` / `instances`                  |
+| 2          | `projectImages` を追加                                          |
+| 3          | `masterImages` を追加                                           |
+| 4          | `categories` / `tags` を追加し、Master の文字列を ID 参照へ移行 |
+
+バージョン 4 への移行では、旧 Master が持っていた `category` / `tags` の文字列を
+プロジェクトごとに 1 レコードへまとめて `categories` / `tags` に起こし、
+Master 側を `categoryId` / `tagIds` に書き換える。移行は versionchange
+トランザクションの中で完結させる。
 
 ### 3.4 整合性ルール
 
-| 操作                                      | 挙動                                                                    |
-| ----------------------------------------- | ----------------------------------------------------------------------- |
-| Project 削除                              | 配下の Case / Master / Instance をすべてカスケード削除                  |
-| Case 削除                                 | 配下の Instance をカスケード削除                                        |
-| Master 削除                               | 参照している Instance が 1 件でもあれば**削除を拒否**し、使用件数を返す |
-| Instance 追加（既存の caseId + masterId） | 新規作成せず既存レコードの `qty` に加算                                 |
-| `qty` が 0 以下になる更新                 | レコードを削除する                                                      |
+| 操作                                      | 挙動                                                                                    |
+| ----------------------------------------- | --------------------------------------------------------------------------------------- |
+| Project 削除                              | 配下の Case / Category / Tag / Master / Instance をすべてカスケード削除                 |
+| Case 削除                                 | 配下の Instance をカスケード削除                                                        |
+| Master 削除                               | 参照している Instance が 1 件でもあれば**削除を拒否**し、使用件数を返す                 |
+| Category / Tag 削除                       | 参照している Master が 1 件でもあれば**削除を拒否**し、使用件数を返す                   |
+| Master 保存                               | 存在しない Category は拒否、存在しない Tag は落とす。別プロジェクトの分類は参照できない |
+| Instance 追加（既存の caseId + masterId） | 新規作成せず既存レコードの `qty` に加算                                                 |
+| `qty` が 0 以下になる更新                 | レコードを削除する                                                                      |
 
 カスケード削除は必ず**単一トランザクション内**で実行すること。
 
@@ -159,6 +196,8 @@ IndexedDB は `Date` を保存できるが、JSON エクスポート時に変換
 | Project 数                   | 10       |
 | 1 Project あたり Case 数     | 50       |
 | 1 Project あたり Master 数   | 100      |
+| 1 Project あたり Category 数 | 20       |
+| 1 Project あたり Tag 数      | 50       |
 | 1 Case あたり Instance 数    | 100      |
 | 1 Project あたり Instance 数 | 5,000    |
 | 全体 Instance 数             | 50,000   |
@@ -204,27 +243,35 @@ src/app/
 │   ├── repositories/
 │   │   ├── project.repository.ts
 │   │   ├── case.repository.ts
+│   │   ├── category.repository.ts
+│   │   ├── tag.repository.ts
 │   │   ├── master.repository.ts
 │   │   └── instance.repository.ts
 │   └── services/
 │       ├── project.service.ts
 │       ├── case.service.ts
+│       ├── label.service.ts       # カテゴリ / タグ共通の基底
+│       ├── category.service.ts
+│       ├── tag.service.ts
 │       ├── master.service.ts
 │       ├── instance.service.ts
-│       ├── backup.service.ts      # エクスポート / インポート
+│       ├── backup.service.ts      # バックアップ（全データ）
+│       ├── master-transfer.service.ts # オブジェクトマスタの移し替え
 │       └── app-update.service.ts  # SwUpdate 監視
 ├── features/
 │   ├── project-list/
 │   ├── project-menu/              # プロジェクト内のメニュー
 │   ├── case-overview/             # ケース展開ビュー
 │   ├── case-list/                 # ケースマスタ
-│   ├── case-detail/
+│   ├── label-list/                # カテゴリマスタ / タグマスタ（共通）
 │   ├── master-list/               # オブジェクトマスタ
 │   └── settings/
 └── shared/
     ├── components/
     └── utils/
-        └── id.ts                  # newId() = crypto.randomUUID()
+        ├── id.ts                  # newId() = crypto.randomUUID()
+        ├── image.ts               # 縮小・再圧縮 / base64 変換
+        └── file.ts                # ファイル名の組み立てとダウンロード
 ```
 
 すべて `providedIn: 'root'` の Injectable として登録し、`inject()` 関数で注入する。
@@ -255,6 +302,15 @@ getById(id: string): Promise<Case | undefined>
 put(c: Case): Promise<void>
 delete(id: string): Promise<void>
 deleteByProject(projectId: string): Promise<void>
+
+// category.repository.ts / tag.repository.ts（形は同じ）
+getByProject(projectId: string): Promise<Label[]>
+getById(id: string): Promise<Label | undefined>
+findByName(projectId: string, name: string): Promise<Label | undefined>
+put(label: Label): Promise<void>
+delete(id: string): Promise<void>
+deleteByProject(projectId: string): Promise<void>
+countByProject(projectId: string): Promise<number>
 
 // master.repository.ts
 getByProject(projectId: string): Promise<Master[]>
@@ -302,12 +358,26 @@ delete(masterId):
 UI 側はこのエラーを捕捉し、「このオブジェクトは N 件のケースで使用中のため削除できません」
 と表示する。
 
-### 6.3 ProjectService.delete()
+### 6.3 LabelService.delete()（CategoryService / TagService 共通）
+
+```
+delete(labelId):
+  1. 同一プロジェクトの Master を読み、この分類を参照している件数を数える
+  2. 0 件でなければ LabelInUseError を投げる（呼び名と件数を含める）
+  3. 0 件なら削除
+```
+
+カテゴリとタグは「どの Repository に保存するか」「Master のどの項目から参照されるか」
+だけが違うため、共通処理は `LabelService`（抽象クラス）に置き、
+`CategoryService` / `TagService` はその 2 点だけを埋める。
+
+### 6.4 ProjectService.delete()
 
 ```
 delete(projectId):
   単一トランザクションで
-  instances → cases → masters → project の順に削除する
+  instances → cases → masterImages → masters → categories → tags
+  → projectImages → project の順に削除する
 ```
 
 ---
@@ -318,17 +388,22 @@ delete(projectId):
 
 **HashLocationStrategy を使用する。** GitHub Pages で 404.html 対策を不要にするため。
 
-| パス                                 | 画面                               |
-| ------------------------------------ | ---------------------------------- |
-| `/`                                  | プロジェクト一覧                   |
-| `/projects/:projectId`               | プロジェクトメニュー               |
-| `/projects/:projectId/overview`      | ケースとオブジェクトの一覧         |
-| `/projects/:projectId/cases`         | ケースマスタ                       |
-| `/projects/:projectId/cases/:caseId` | ケース詳細（インスタンス一覧）     |
-| `/projects/:projectId/masters`       | オブジェクトマスタ（マスター一覧） |
-| `/settings`                          | 設定（エクスポート / インポート）  |
+| パス                              | 画面                               |
+| --------------------------------- | ---------------------------------- |
+| `/`                               | プロジェクト一覧                   |
+| `/projects/:projectId`            | プロジェクトメニュー               |
+| `/projects/:projectId/overview`   | ケースとオブジェクトの一覧         |
+| `/projects/:projectId/cases`      | ケースマスタ                       |
+| `/projects/:projectId/categories` | カテゴリマスタ                     |
+| `/projects/:projectId/tags`       | タグマスタ                         |
+| `/projects/:projectId/masters`    | オブジェクトマスタ（マスター一覧） |
+| `/settings`                       | 設定（エクスポート / インポート）  |
 
 存在しない ID にアクセスした場合は一覧へリダイレクトする。
+
+カテゴリマスタとタグマスタは同一コンポーネント（`label-list`）で、ルートの
+`data: { kind: 'category' | 'tag' }` を `withComponentInputBinding()` 経由で
+`input` として受け取り、扱う対象を切り替える。
 
 ### 7.2 各画面の要件
 
@@ -343,31 +418,60 @@ delete(projectId):
 
 **プロジェクトメニュー**
 
-- プロジェクト名・イメージ画像・メモを出し、以下 3 つへの導線だけを置く
+- プロジェクト名・イメージ画像・メモを出し、以下 5 つへの導線だけを置く
   - ケースとオブジェクトの一覧
   - ケースマスタ（ケース数を併記）
   - オブジェクトマスタ（オブジェクト数を併記）
+  - カテゴリマスタ（カテゴリ数を併記）
+  - タグマスタ（タグ数を併記）
+- 4 つのマスタは 1 枚のカードにまとめる。初期表示は展開しておき、見出しを押すと畳める
+  （状態は `aria-expanded` / `aria-controls` で表す）
 - 件数はインデックスの `count` だけで取り、インスタンスは読み込まない
 
 **ケースとオブジェクトの一覧**
 
 - ケースを `order` 順に展開ビューとして並べる。行にはケース名と合計数を出す
-- 行を開くとそのケースのインスタンスを一覧表示する（サムネイル・名前・カテゴリ・タグ・個数）
-- インスタンスは開かれたケースの分だけ `by-case` インデックスで読み、一度読んだ分はページ内で保持する
+- 各行にはそのケースのインスタンスを一覧表示する（サムネイル・名前・カテゴリ・タグ・個数）
+- 初期表示は全ケースを展開する。見出しを押すと個別に畳める
+- インスタンスは展開中のケースの分を `by-case` インデックスで読み、一度読んだ分はページ内で保持する
 - 展開状態は `aria-expanded` / `aria-controls` で表す
 - 個数の編集はここでは行わず、ケース詳細への導線を置く
+
+**マスタ画面に共通のレイアウト**
+
+- ケースマスタ / カテゴリマスタ / タグマスタ / オブジェクトマスタは同じ骨格にする
+- 見出し行は h1 と説明ヒントだけを置く（スマホで追加ボタンが折り返さないようにする）
+- リストの直上に「◯ 件を表示中」を置き、その行の右端に追加ボタンを並べる
+- 1 件もないときは EmptyState 内の「最初の◯◯を追加」が追加の導線になる
+- 各行の編集・削除はアイコンボタンで揃える（タップ領域は 44px 角以上）。
+  並べ替えの ↑ ↓ も同じ大きさにして、行内のボタンの高さを揃える
 
 **ケースマスタ**
 
 - ケースを `order` 順に一覧表示。各ケースのインスタンス合計数を出す
 - ケースの追加、名前変更、削除、並び替え
 
+**カテゴリマスタ / タグマスタ**
+
+- そのプロジェクトのカテゴリ（タグ）を `order` 順に一覧表示。使用中のオブジェクト件数を出す
+- 追加、名前変更、並び替え、削除
+- 使用中のものは削除できない（`LabelInUseError`）。どのオブジェクトで使われているかを展開表示できる
+- 名前は同一プロジェクト内で一意。重複はエラーにする
+- 2 つの画面は同一コンポーネントで、文言と対象サービスだけを切り替える
+
 **オブジェクトマスタ（マスター一覧）**
 
 - そのプロジェクトのマスターを一覧表示。名前、カテゴリ、タグ、使用ケース数
-- 名前・カテゴリ・タグでの絞り込み
-- 追加、編集、削除。編集・削除はアイコンボタン（タップ領域は 44px 角以上）
+- 名前・カテゴリ・タグでの絞り込み（カテゴリ・タグはマスタから選ぶドロップダウン）
+- 絞り込みは折りたたみパネルに入れ、初期表示では閉じておく（`aria-expanded` / `aria-controls`）
+- 閉じている間も有効な条件はチップで見せ、チップを押すとその条件だけ外れる
+- 追加、編集、削除
+- 作成・編集フォームでは、カテゴリはドロップダウン（「なし」を含む）、
+  タグはチェックボックス群でマスタから選ぶ。自由入力はしない
+- 対象のマスタが空のときは、それぞれのマスタ画面への導線を出す
 - 各マスターについて「どのケースで使われているか」を展開表示できる
+- 別のプロジェクトとの移し替え（9 章）を折りたたみパネルで置く。
+  オブジェクトが 0 件でも取り込めるよう、パネルは一覧が空のときも表示する
 
 **ケース詳細（インスタンス一覧）**
 
@@ -378,7 +482,7 @@ delete(projectId):
 
 **設定**
 
-- JSON エクスポート、JSON インポート
+- JSON エクスポート、JSON インポート（全データのバックアップ。8 章）
 - `navigator.storage.estimate()` による使用量表示
 - 全データ削除（二段階確認）
 
@@ -402,18 +506,25 @@ delete(projectId):
 ```json
 {
   "format": "tallia-backup",
-  "version": 1,
+  "version": 4,
   "exportedAt": "2026-08-31T12:00:00.000Z",
   "projects": [],
   "cases": [],
+  "categories": [],
+  "tags": [],
   "masters": [],
-  "instances": []
+  "instances": [],
+  "images": [],
+  "masterImages": []
 }
 ```
 
 - `version` は必須。将来スキーマを変更した際の移行処理の分岐点になる
 - 読み込み時は `format` と `version` を必ず検証し、不一致ならエラーにする
-- 各配列にはストアのレコードをそのまま入れる（変換しない）
+- 各配列にはストアのレコードをそのまま入れる（画像だけは base64 に変換する）
+- 旧版も読み込める（`1`: 画像なし / `2`: プロジェクトの画像のみ / `3`: カテゴリ・タグが文字列）
+- `3` 以前のファイルは取り込み時に、文字列のカテゴリ・タグを
+  `categories` / `tags` のレコードへ振り替える（DB の移行と同じ規則）
 
 ### 8.2 エクスポート
 
@@ -433,28 +544,121 @@ delete(projectId):
 | **追加** | すべての ID を新規採番し直し、別プロジェクトとして追加する。既存データは変更しない |
 | **置換** | 既存の全データを削除してからファイルの内容を投入する。二段階確認を必須とする       |
 
-「追加」モードでは、ID を振り直す際に外部キー（`projectId` / `caseId` / `masterId`）も
-新旧 ID の対応表を使って一貫して差し替えること。ここを間違えると参照が壊れる。
+「追加」モードでは、ID を振り直す際に外部キー（`projectId` / `caseId` / `masterId` /
+`categoryId` / `tagIds`）も新旧 ID の対応表を使って一貫して差し替えること。
+ここを間違えると参照が壊れる。参照先が見つからないカテゴリ・タグは落とし、
+オブジェクト自体は取り込む。
 
 インポートは単一トランザクションで実行し、途中で失敗した場合はロールバックする。
 
 ---
 
-## 9. PWA
+## 9. オブジェクトマスタの移し替え
 
-### 9.1 セットアップ
+プロジェクト間でオブジェクトマスタの定義だけを持っていくための機能。
+8 章のバックアップとは目的が違うため、形式・拡張子・取り込み方をすべて別立てにする。
+
+|        | バックアップ（8 章）            | 移し替え（9 章）                   |
+| ------ | ------------------------------- | ---------------------------------- |
+| 目的   | 同じデータをそのまま復元する    | 別のプロジェクトへ定義を配る       |
+| 単位   | 全プロジェクト / 1 プロジェクト | 1 プロジェクトのオブジェクトマスタ |
+| 対象   | 全ストア                        | Master・Category・Tag・MasterImage |
+| ID     | ファイルに含む                  | **含まない**                       |
+| 拡張子 | `.json`                         | `.tallia`                          |
+| 画面   | 設定                            | オブジェクトマスタ                 |
+
+### 9.1 フォーマット
+
+```json
+{
+  "format": "tallia-masters",
+  "version": 1,
+  "exportedAt": "2026-08-31T12:00:00.000Z",
+  "source": { "projectName": "ゲームA" },
+  "categories": ["素材", "武器"],
+  "tags": ["レア", "換金用"],
+  "masters": [
+    {
+      "name": "鉄鉱石",
+      "category": "素材",
+      "tags": ["レア"],
+      "note": "洞窟で拾える",
+      "image": { "data": "<base64>", "type": "image/webp", "width": 480, "height": 480 }
+    }
+  ]
+}
+```
+
+- **ID を一切載せない**。取り込み先は別プロジェクトなので、元の `id` / `projectId` /
+  `categoryId` / `tagIds` は意味を持たない。したがってバックアップの `remapIds` に
+  あたる対応表の差し替えも不要になる
+- カテゴリ・タグは**名前**で持つ。取り込み先で名前解決し、無ければ作る
+- `categories` / `tags` には、どのオブジェクトからも参照されていないものも含めて
+  プロジェクトの分類マスタを `order` 順に並べる（取り込み先での並び順を再現するため）
+- `createdAt` / `updatedAt` は運ばない。取り込んだ時刻を採番し直す
+- 画像はオブジェクトにインラインで持つ（1 オブジェクトにつき 1 枚なので別配列にしない）
+- `source.projectName` は取り込み画面の表示にのみ使う
+- ケースと Instance は移し替え先で意味を持たないため対象外
+
+### 9.2 拡張子
+
+実体は JSON だが、拡張子は `.tallia` にする。
+
+- 手で開いて編集するフォーマットではないため、`.json` を名乗る利点がない
+- ファイルピッカーで候補を絞れる（ただし `accept` はフィルタであって制約ではない）
+- **誤インポートを実際に防ぐのは拡張子ではなく中身の検証**。`format` と `version` を
+  必ず確かめ、バックアップファイルなど別形式は明示的に拒否する
+
+### 9.3 エクスポート
+
+- オブジェクトマスタ画面から、表示中のプロジェクトを対象に書き出す
+- ファイル名: `tallia-masters-{プロジェクト名}-{YYYYMMDD-HHmmss}.tallia`
+- `masters` は名前順に固定する（書き出し直したときに差分を見比べられるようにする）
+- オブジェクトが 0 件のときは書き出せない
+
+### 9.4 インポート
+
+取り込み先は「今表示しているプロジェクト」。突合キーは**オブジェクト名**
+（`by-project-name` により名前はプロジェクト内で一意）。
+
+| モード                       | 同名のオブジェクトがあったとき                         |
+| ---------------------------- | ------------------------------------------------------ |
+| **そのままにする**（`skip`） | ファイル側を取り込まず、既存を残す                     |
+| **上書き**（`overwrite`）    | カテゴリ・タグ・メモ・画像をファイルの内容で置き換える |
+
+- **どちらのモードでも既存のオブジェクトを削除しない**。バックアップの「置換」と違い、
+  取り込みで既存データが消えることはない
+- `overwrite` では既存の `id` を保つ。参照している Instance が壊れないようにするため
+- `overwrite` でファイルに画像が無ければ、取り込み先の画像も消す（完全に合わせる）
+- 同名のカテゴリ・タグは作り直さず既存を指す。新しく作る場合の `order` は
+  取り込み先の末尾から続ける
+- 取り込む前に見積もり（新規 / 同名 / 画像 / 新しく作られる分類の件数）を表示し、
+  上書きで実際に置き換わるものがある場合だけ確認ダイアログを挟む
+- 単一トランザクションで実行し、途中で失敗した場合はロールバックする
+- base64 のデコードはトランザクションの**開始前**に済ませる
+  （待機している間に自動コミットされるため）
+- 壊れた画像はその 1 枚だけを落とし、オブジェクト自体は取り込む
+- 画像は書き出し元で既に縮小・再圧縮済みなので、**取り込み時に再変換しない**
+  （二重圧縮による劣化を避ける）
+- ファイル内で名前が重複した行は 2 件目以降を落とす（`parse` の段階で担保する）
+
+---
+
+## 10. PWA
+
+### 10.1 セットアップ
 
 ```
 ng add @angular/pwa
 ```
 
-### 9.2 Service Worker 設定（`ngsw-config.json`）
+### 10.2 Service Worker 設定（`ngsw-config.json`）
 
 - アプリシェル（HTML / JS / CSS / アイコン）は `prefetch` でインストール時に取得
 - データキャッシュ（`dataGroups`）は**設定しない**。外部通信を行わないため不要
 - 完全オフラインで全機能が動作すること
 
-### 9.3 マニフェスト
+### 10.3 マニフェスト
 
 GitHub Pages のプロジェクトサイトはサブパス配信になるため、以下を必ず合わせる。
 
@@ -470,28 +674,28 @@ GitHub Pages のプロジェクトサイトはサブパス配信になるため�
 
 `start_url` と `scope` がサブパスと一致していないと、インストール後に正しく起動しない。
 
-### 9.4 更新検知
+### 10.4 更新検知
 
 `AppUpdateService` で `SwUpdate.versionUpdates` を購読し、
 `VERSION_READY` を検知したら「新しいバージョンがあります」と再読み込みを促す UI を出す。
 自動リロードはしない（編集中のデータを失う可能性があるため）。
 
-### 9.5 ストレージ永続化
+### 10.5 ストレージ永続化
 
 初回起動時に `navigator.storage.persist()` を呼ぶ。
 拒否されても機能は継続する。結果に応じて設定画面に永続化の状態を表示する。
 
 ---
 
-## 10. デプロイ
+## 11. デプロイ
 
-### 10.1 ビルド
+### 11.1 ビルド
 
 ```
 ng build --base-href /tallia/
 ```
 
-### 10.2 GitHub Actions
+### 11.2 GitHub Actions
 
 `.github/workflows/deploy.yml` を作成する。
 
@@ -500,29 +704,29 @@ ng build --base-href /tallia/
 - `actions/upload-pages-artifact` と `actions/deploy-pages` を使用する
 - 出力ディレクトリ直下に `.nojekyll` を配置する（`_` 始まりのファイルが無視されるのを防ぐ）
 
-### 10.3 リポジトリ設定
+### 11.3 リポジトリ設定
 
 - Settings → Pages → Source を「GitHub Actions」にする
 
 ---
 
-## 11. 非機能要件
+## 12. 非機能要件
 
-### 11.1 パフォーマンス
+### 12.1 パフォーマンス
 
 - 起動時に読み込むのはプロジェクト一覧のみ
 - ケース詳細では `by-case` インデックスで該当ケース分のみ取得する
 - マスター一覧が数百件になりうるため、絞り込みは Signal の `computed` で行う
 - 1 画面あたりの表示件数は数百件を想定。仮想スクロールは実装しない
 
-### 11.2 エラー処理
+### 12.2 エラー処理
 
 - IndexedDB の操作失敗は握り潰さず、UI にエラーを表示する
 - インポート時の JSON パース失敗、フォーマット不一致は明示的にメッセージを出す
 - ブラウザが IndexedDB をサポートしない場合（プライベートモード等）は
   起動時に警告を表示する
 
-### 11.3 テスト
+### 12.3 テスト
 
 - Repository 層は `fake-indexeddb` を使ったユニットテストを書く
 - Service 層の整合性ルール（カスケード削除、qty 加算、削除拒否）は必ずテストする
@@ -530,7 +734,7 @@ ng build --base-href /tallia/
 
 ---
 
-## 12. 実装順序
+## 13. 実装順序
 
 1. Angular プロジェクト作成、strict 設定、ディレクトリ構成の雛形
 2. `schema.ts` の型定義と `database.ts`（`openDB` + `upgrade`）
@@ -540,14 +744,15 @@ ng build --base-href /tallia/
 6. プロジェクト一覧 → ケース一覧 → ケース詳細 の順に画面を実装
 7. マスター一覧
 8. エクスポート / インポート
-9. PWA 化と更新検知
-10. GitHub Actions によるデプロイ設定
+9. オブジェクトマスタの移し替え
+10. PWA 化と更新検知
+11. GitHub Actions によるデプロイ設定
 
 各ステップは独立して動作確認できる状態にしてから次へ進むこと。
 
 ---
 
-## 13. 確認が必要な事項
+## 14. 確認が必要な事項
 
 以下は実装開始前に依頼者へ確認すること。
 

@@ -2,6 +2,8 @@ import { TestBed } from '@angular/core/testing';
 import { resetDatabase } from '../db/db.spec-helper';
 import { BACKUP_FORMAT, BACKUP_VERSION } from '../db/schema';
 import { CaseRepository } from '../repositories/case.repository';
+import { CategoryRepository } from '../repositories/category.repository';
+import { TagRepository } from '../repositories/tag.repository';
 import { MasterImageRepository } from '../repositories/master-image.repository';
 import { ProjectImageRepository } from '../repositories/project-image.repository';
 import { InstanceRepository } from '../repositories/instance.repository';
@@ -9,6 +11,8 @@ import { MasterRepository } from '../repositories/master.repository';
 import { ProjectRepository } from '../repositories/project.repository';
 import { BackupService } from './backup.service';
 import { CaseService } from './case.service';
+import { CategoryService } from './category.service';
+import { TagService } from './tag.service';
 import { InstanceService } from './instance.service';
 import { MasterService } from './master.service';
 import { MasterImageService } from './master-image.service';
@@ -27,7 +31,13 @@ describe('BackupService', () => {
   async function seed(projectName: string): Promise<string> {
     const project = await TestBed.inject(ProjectService).create(projectName);
     const target = await TestBed.inject(CaseService).create(project.id, '1章');
-    const master = await TestBed.inject(MasterService).create(project.id, { name: '鉄鉱石' });
+    const category = await TestBed.inject(CategoryService).create(project.id, '素材');
+    const tag = await TestBed.inject(TagService).create(project.id, 'レア');
+    const master = await TestBed.inject(MasterService).create(project.id, {
+      name: '鉄鉱石',
+      categoryId: category.id,
+      tagIds: [tag.id],
+    });
     await TestBed.inject(InstanceService).addToCase(target.id, master.id, 3);
     return project.id;
   }
@@ -44,6 +54,8 @@ describe('BackupService', () => {
     expect(file.cases).toHaveLength(2);
     expect(file.masters).toHaveLength(2);
     expect(file.instances).toHaveLength(2);
+    expect(file.categories).toHaveLength(2);
+    expect(file.tags).toHaveLength(2);
   });
 
   it('プロジェクト単位ではそのプロジェクトのレコードだけを含む', async () => {
@@ -56,6 +68,8 @@ describe('BackupService', () => {
     expect(file.cases.every((c) => c.projectId === first)).toBe(true);
     expect(file.masters.every((m) => m.projectId === first)).toBe(true);
     expect(file.instances.every((i) => i.projectId === first)).toBe(true);
+    expect(file.categories?.every((c) => c.projectId === first)).toBe(true);
+    expect(file.tags?.every((t) => t.projectId === first)).toBe(true);
   });
 
   it('ファイル名は日時付きで、プロジェクト名も入れられる', () => {
@@ -88,6 +102,8 @@ describe('BackupService', () => {
     expect(result).toEqual({
       projects: 1,
       cases: 1,
+      categories: 1,
+      tags: 1,
       masters: 1,
       instances: 1,
       images: 0,
@@ -114,6 +130,78 @@ describe('BackupService', () => {
     expect(await TestBed.inject(InstanceRepository).getByProject(original)).toHaveLength(1);
   });
 
+  it('追加モードではカテゴリ / タグも採番し直し、オブジェクトの参照が追随する', async () => {
+    const original = await seed('ゲームA');
+    const file = await backup.exportProject(original);
+
+    await backup.import(file, 'append');
+
+    const projects = await TestBed.inject(ProjectRepository).getAll();
+    const added = projects.find((p) => p.id !== original);
+    const addedCategories = await TestBed.inject(CategoryRepository).getByProject(added!.id);
+    const addedTags = await TestBed.inject(TagRepository).getByProject(added!.id);
+    const addedMasters = await TestBed.inject(MasterRepository).getByProject(added!.id);
+
+    expect(addedCategories).toHaveLength(1);
+    expect(addedTags).toHaveLength(1);
+    // 新しい ID を指し、元のプロジェクトの分類は参照していない
+    expect(addedMasters[0].categoryId).toBe(addedCategories[0].id);
+    expect(addedMasters[0].tagIds).toEqual([addedTags[0].id]);
+    expect(await TestBed.inject(CategoryRepository).getByProject(original)).toHaveLength(1);
+  });
+
+  it('version 3 のファイルは文字列のカテゴリ / タグをレコードに振り替えて取り込む', async () => {
+    const legacy = {
+      format: BACKUP_FORMAT,
+      version: 3,
+      exportedAt: '2026-08-31T12:00:00.000Z',
+      projects: [
+        {
+          id: 'p1',
+          name: 'ゲームA',
+          createdAt: '2026-08-31T12:00:00.000Z',
+          updatedAt: '2026-08-31T12:00:00.000Z',
+        },
+      ],
+      cases: [],
+      masters: [
+        {
+          id: 'm1',
+          projectId: 'p1',
+          name: '鉄鉱石',
+          category: '素材',
+          tags: ['レア', '換金用'],
+          createdAt: '2026-08-31T12:00:00.000Z',
+          updatedAt: '2026-08-31T12:00:00.000Z',
+        },
+        {
+          id: 'm2',
+          projectId: 'p1',
+          name: '銅鉱石',
+          category: '素材',
+          tags: ['換金用'],
+          createdAt: '2026-08-31T12:00:00.000Z',
+          updatedAt: '2026-08-31T12:00:00.000Z',
+        },
+      ],
+      instances: [],
+    };
+
+    const parsed = backup.parse(JSON.stringify(legacy));
+    const result = await backup.import(parsed, 'replace');
+
+    expect(result.categories).toBe(1);
+    expect(result.tags).toBe(2);
+    const categories = await TestBed.inject(CategoryRepository).getByProject('p1');
+    const tags = await TestBed.inject(TagRepository).getByProject('p1');
+    const masters = await TestBed.inject(MasterRepository).getByProject('p1');
+    expect(categories.map((c) => c.name)).toEqual(['素材']);
+    expect(tags.map((t) => t.name).sort()).toEqual(['レア', '換金用']);
+    // 同じ名前は 1 レコードにまとまり、両方のオブジェクトが同じ ID を指す
+    expect(masters.map((m) => m.categoryId)).toEqual([categories[0].id, categories[0].id]);
+    expect(masters.find((m) => m.id === 'm2')?.tagIds).toHaveLength(1);
+  });
+
   it('置換モードは既存データを消してからファイルの内容を投入する', async () => {
     const first = await seed('ゲームA');
     const file = await backup.exportProject(first);
@@ -126,7 +214,7 @@ describe('BackupService', () => {
     expect(await TestBed.inject(InstanceRepository).getByProject(first)).toHaveLength(1);
   });
 
-  it('全データ削除で 4 ストアとも空になる', async () => {
+  it('全データ削除でどのストアも空になる', async () => {
     const projectId = await seed('ゲームA');
 
     await backup.deleteEverything();
@@ -135,6 +223,8 @@ describe('BackupService', () => {
     expect(await TestBed.inject(CaseRepository).getByProject(projectId)).toEqual([]);
     expect(await TestBed.inject(MasterRepository).getByProject(projectId)).toEqual([]);
     expect(await TestBed.inject(InstanceRepository).getByProject(projectId)).toEqual([]);
+    expect(await TestBed.inject(CategoryRepository).getByProject(projectId)).toEqual([]);
+    expect(await TestBed.inject(TagRepository).getByProject(projectId)).toEqual([]);
   });
 
   it('書き出した JSON は Date ではなく ISO 文字列を保持する', async () => {

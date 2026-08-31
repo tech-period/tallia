@@ -1,8 +1,18 @@
 import { DBSchema, IDBPDatabase, IDBPTransaction, openDB } from 'idb';
-import { Case, Instance, Master, MasterImage, Project, ProjectImage } from './schema';
+import { newId, nowIso } from '../../shared/utils/id';
+import {
+  Category,
+  Case,
+  Instance,
+  Master,
+  MasterImage,
+  Project,
+  ProjectImage,
+  Tag,
+} from './schema';
 
 export const DB_NAME = 'tallia';
-export const DB_VERSION = 3;
+export const DB_VERSION = 4;
 
 export interface TalliaDB extends DBSchema {
   projects: {
@@ -14,6 +24,22 @@ export interface TalliaDB extends DBSchema {
     value: Case;
     indexes: {
       'by-project': string;
+    };
+  };
+  categories: {
+    key: string;
+    value: Category;
+    indexes: {
+      'by-project': string;
+      'by-project-name': [string, string];
+    };
+  };
+  tags: {
+    key: string;
+    value: Tag;
+    indexes: {
+      'by-project': string;
+      'by-project-name': [string, string];
     };
   };
   masters: {
@@ -48,11 +74,20 @@ export interface TalliaDB extends DBSchema {
 }
 
 export type TalliaStoreName =
-  'projects' | 'cases' | 'masters' | 'instances' | 'projectImages' | 'masterImages';
+  | 'projects'
+  | 'cases'
+  | 'categories'
+  | 'tags'
+  | 'masters'
+  | 'instances'
+  | 'projectImages'
+  | 'masterImages';
 
 export const ALL_STORES: TalliaStoreName[] = [
   'projects',
   'cases',
+  'categories',
+  'tags',
   'masters',
   'instances',
   'projectImages',
@@ -88,7 +123,7 @@ export function getDb(): Promise<IDBPDatabase<TalliaDB>> {
   }
 
   dbPromise ??= openDB<TalliaDB>(DB_NAME, DB_VERSION, {
-    upgrade(db, oldVersion) {
+    upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         db.createObjectStore('projects', { keyPath: 'id' });
 
@@ -116,6 +151,20 @@ export function getDb(): Promise<IDBPDatabase<TalliaDB>> {
         const masterImages = db.createObjectStore('masterImages', { keyPath: 'masterId' });
         // 表示中プロジェクト分だけを読む / プロジェクト削除でまとめて消すために使う
         masterImages.createIndex('by-project', 'projectId');
+      }
+
+      if (oldVersion < 4) {
+        // カテゴリとタグをマスタ化する。Master からは ID で参照する
+        for (const name of ['categories', 'tags'] as const) {
+          const store = db.createObjectStore(name, { keyPath: 'id' });
+          store.createIndex('by-project', 'projectId');
+          store.createIndex('by-project-name', ['projectId', 'name']);
+        }
+        if (oldVersion > 0) {
+          // 既存の文字列をレコードへ振り替える。
+          // versionchange トランザクションの中で完結するため await しない
+          void migrateLabels(tx);
+        }
       }
     },
     blocking() {
@@ -151,6 +200,77 @@ export async function runTransaction<T>(fn: (tx: TalliaTransaction) => Promise<T
     // abort 由来の reject は無視し、元のエラーを投げ直す。
     await tx.done.catch(() => undefined);
     throw error;
+  }
+}
+
+/** DB バージョン 3 以前の Master。カテゴリとタグを文字列で持っていた */
+interface LegacyMaster extends Omit<Master, 'categoryId' | 'tagIds'> {
+  category?: string;
+  tags?: string[];
+}
+
+/**
+ * 旧 Master が持っていたカテゴリ / タグの文字列を `categories` / `tags` の
+ * レコードに起こし、Master 側は ID 参照へ書き換える。
+ * 同じ名前はプロジェクトごとに 1 レコードへまとめる。
+ */
+async function migrateLabels(
+  tx: IDBPTransaction<TalliaDB, TalliaStoreName[], 'versionchange'>,
+): Promise<void> {
+  const masterStore = tx.objectStore('masters');
+  const legacyMasters = (await masterStore.getAll()) as unknown as LegacyMaster[];
+  if (legacyMasters.length === 0) {
+    return;
+  }
+
+  const timestamp = nowIso();
+  const orders = new Map<string, number>();
+  const ids = new Map<string, string>();
+
+  /** `projectId` + 名前ごとに 1 件だけ作り、その ID を返す */
+  const labelId = async (
+    storeName: 'categories' | 'tags',
+    projectId: string,
+    name: string,
+  ): Promise<string> => {
+    const key = `${storeName}\u0000${projectId}\u0000${name}`;
+    const known = ids.get(key);
+    if (known) {
+      return known;
+    }
+    const orderKey = `${storeName}\u0000${projectId}`;
+    const order = orders.get(orderKey) ?? 0;
+    orders.set(orderKey, order + 1);
+    const label: Category | Tag = {
+      id: newId(),
+      projectId,
+      name,
+      order,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    await tx.objectStore(storeName).put(label);
+    ids.set(key, label.id);
+    return label.id;
+  };
+
+  for (const legacy of legacyMasters) {
+    const { category, tags, ...rest } = legacy;
+    const migrated: Master = { ...rest, tagIds: [] };
+    const categoryName = category?.trim();
+    if (categoryName) {
+      migrated.categoryId = await labelId('categories', legacy.projectId, categoryName);
+    }
+    for (const tag of tags ?? []) {
+      const name = tag.trim();
+      if (name) {
+        const id = await labelId('tags', legacy.projectId, name);
+        if (!migrated.tagIds.includes(id)) {
+          migrated.tagIds.push(id);
+        }
+      }
+    }
+    await masterStore.put(migrated);
   }
 }
 
