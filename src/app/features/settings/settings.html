@@ -1,0 +1,236 @@
+<div class="mb-5 flex items-center gap-1">
+  <h1 class="text-2xl font-bold tracking-tight">設定</h1>
+  <app-info-hint
+    label="データの取り扱いの説明"
+    text="データはこのブラウザの中だけに保存されます。外部には一切送信されません。"
+  />
+</div>
+
+<app-error-banner [message]="error()" (dismissed)="error.set(null)" />
+
+@if (notice(); as message) {
+  <p
+    role="status"
+    class="mb-4 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+  >
+    {{ message }}
+  </p>
+}
+
+<section class="card mb-5 p-4" aria-labelledby="export-heading">
+  <div class="mb-4 flex items-center gap-1">
+    <h2 id="export-heading" class="text-lg font-semibold">エクスポート</h2>
+    <app-info-hint
+      label="エクスポートの説明"
+      text="記録を JSON ファイルとして書き出します。別の端末へ移すときや、控えを残すときに使ってください。"
+    />
+  </div>
+
+  <div class="mb-4">
+    <button type="button" class="btn btn-primary" (click)="exportAll()">
+      全プロジェクトを書き出す
+    </button>
+  </div>
+
+  <div class="flex flex-wrap items-end gap-3">
+    <div class="grow sm:max-w-xs">
+      <label class="field-label" for="export-project">プロジェクト単位で書き出す</label>
+      <select
+        id="export-project"
+        class="field-input"
+        [value]="exportProjectId()"
+        (change)="onExportProjectChange($event)"
+      >
+        <option value="">プロジェクトを選択</option>
+        @for (project of allProjects(); track project.id) {
+          <option [value]="project.id">{{ project.name }}</option>
+        }
+      </select>
+    </div>
+    <button
+      type="button"
+      class="btn btn-secondary"
+      [disabled]="exportProjectId() === ''"
+      (click)="exportOne()"
+    >
+      このプロジェクトを書き出す
+    </button>
+  </div>
+</section>
+
+<section class="card mb-5 p-4" aria-labelledby="import-heading">
+  <div class="mb-4 flex items-center gap-1">
+    <h2 id="import-heading" class="text-lg font-semibold">インポート</h2>
+    <app-info-hint
+      label="インポートの説明"
+      text="Tallia から書き出した JSON ファイルだけを取り込めます。"
+    />
+  </div>
+
+  <div class="mb-4">
+    <label class="field-label" for="import-file">ファイルを選択</label>
+    <input
+      id="import-file"
+      class="field-input"
+      type="file"
+      accept="application/json"
+      (change)="onFileSelected($event)"
+    />
+  </div>
+
+  @if (pendingSummary(); as summary) {
+    <div class="mb-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+      <p class="font-medium">{{ pendingFileName() }}</p>
+      <p class="mt-1">書き出し日時: {{ summary.exportedAt }}</p>
+      <p class="mt-1">
+        プロジェクト {{ summary.projects }} / ケース {{ summary.cases }} / オブジェクト
+        {{ summary.masters }} / 記録 {{ summary.instances }} / 画像 {{ summary.images }}
+      </p>
+    </div>
+
+    <fieldset class="mb-4">
+      <legend class="field-label">取り込み方</legend>
+      <div class="space-y-2">
+        <label class="flex items-start gap-2 text-sm">
+          <input
+            type="radio"
+            name="import-mode"
+            class="mt-1"
+            value="append"
+            [checked]="importMode() === 'append'"
+            (change)="setImportMode('append')"
+          />
+          <span>
+            <span class="font-medium">追加</span>
+            <span class="block text-slate-600">別プロジェクトとして追加（既存はそのまま）</span>
+          </span>
+        </label>
+        <label class="flex items-start gap-2 text-sm">
+          <input
+            type="radio"
+            name="import-mode"
+            class="mt-1"
+            value="replace"
+            [checked]="importMode() === 'replace'"
+            (change)="setImportMode('replace')"
+          />
+          <span>
+            <span class="font-medium">置換</span>
+            <span class="block text-slate-600">既存データをすべて削除して入れ替え</span>
+          </span>
+        </label>
+      </div>
+    </fieldset>
+
+    <button type="button" class="btn btn-primary" [disabled]="busy()" (click)="startImport()">
+      取り込む
+    </button>
+  }
+</section>
+
+<section class="card mb-5 p-4" aria-labelledby="storage-heading">
+  <h2 id="storage-heading" class="text-lg font-semibold">ストレージ</h2>
+  <dl class="mt-3 space-y-3 text-sm">
+    <div>
+      <dt class="font-medium text-slate-800">使用量</dt>
+      <dd class="text-slate-600">{{ usageLabel() ?? '取得できません' }}</dd>
+    </div>
+    <div>
+      <dt class="flex items-center gap-1 font-medium text-slate-800">
+        <span>永続化</span>
+        <app-info-hint
+          label="永続化の説明"
+          text="有効なら、ブラウザの空き容量が不足してもこのサイトのデータが優先的に保持されます。無効の場合は削除されることがあるため、定期的にエクスポートしてください。"
+        />
+      </dt>
+      <dd class="text-slate-600">{{ persistenceLabel() }}</dd>
+    </div>
+    <div>
+      <dt class="font-medium text-slate-800">IndexedDB</dt>
+      <dd class="text-slate-600">{{ indexedDbAvailable ? '利用できます' : '利用できません' }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="card border-red-200 p-4" aria-labelledby="danger-heading">
+  <h2 id="danger-heading" class="text-lg font-semibold text-red-900">全データ削除</h2>
+  <p class="mt-1 mb-4 text-sm text-slate-600">取り消せません。先にエクスポートを。</p>
+  <button
+    type="button"
+    class="btn btn-danger"
+    [disabled]="busy()"
+    (click)="wipeStep1Open.set(true)"
+  >
+    すべてのデータを削除
+  </button>
+</section>
+
+<app-confirm-dialog
+  [(open)]="replaceStep1Open"
+  heading="既存のデータを置き換えますか？"
+  message="既存データをすべて削除してから取り込みます。取り消せません。"
+  confirmLabel="次へ進む"
+  (confirmed)="openReplaceStep2()"
+/>
+
+<app-modal [(open)]="replaceStep2Open" heading="最終確認: データの置換">
+  <div>
+    <label class="field-label" for="replace-confirm">確認のため「置換」と入力</label>
+    <input
+      id="replace-confirm"
+      class="field-input"
+      type="text"
+      autocomplete="off"
+      [value]="replaceConfirmText()"
+      (input)="onReplaceConfirmInput($event)"
+    />
+  </div>
+  <div modalFooter class="flex justify-end gap-2">
+    <button type="button" class="btn btn-secondary" (click)="replaceStep2Open.set(false)">
+      キャンセル
+    </button>
+    <button
+      type="button"
+      class="btn btn-danger"
+      [disabled]="!replaceConfirmed() || busy()"
+      (click)="confirmReplace()"
+    >
+      置換して取り込む
+    </button>
+  </div>
+</app-modal>
+
+<app-confirm-dialog
+  [(open)]="wipeStep1Open"
+  heading="すべてのデータを削除しますか？"
+  message="保存されているデータをすべて削除します。取り消せません。"
+  confirmLabel="次へ進む"
+  (confirmed)="openWipeStep2()"
+/>
+
+<app-modal [(open)]="wipeStep2Open" heading="最終確認: 全データ削除">
+  <div>
+    <label class="field-label" for="wipe-confirm">確認のため「削除」と入力</label>
+    <input
+      id="wipe-confirm"
+      class="field-input"
+      type="text"
+      autocomplete="off"
+      [value]="wipeConfirmText()"
+      (input)="onWipeConfirmInput($event)"
+    />
+  </div>
+  <div modalFooter class="flex justify-end gap-2">
+    <button type="button" class="btn btn-secondary" (click)="wipeStep2Open.set(false)">
+      キャンセル
+    </button>
+    <button
+      type="button"
+      class="btn btn-danger"
+      [disabled]="!wipeConfirmed() || busy()"
+      (click)="confirmWipe()"
+    >
+      すべて削除する
+    </button>
+  </div>
+</app-modal>

@@ -1,0 +1,61 @@
+<nav aria-label="パンくずリスト" class="mb-3 text-sm">
+  <ol class="flex flex-wrap items-center gap-1 text-slate-600">
+    <li><a routerLink="/" class="rounded text-indigo-800 hover:underline">プロジェクト</a></li>
+    <li aria-hidden="true">/</li>
+    <li class="font-medium text-slate-800">{{ project()?.name ?? '…' }}</li>
+  </ol>
+</nav>
+
+<app-error-banner [message]="error()" (dismissed)="error.set(null)" />
+
+<div class="mb-6 flex items-start gap-4">
+  @if (imageUrl(); as url) {
+    <!-- 装飾目的。プロジェクト名が隣にあるため代替テキストは空にする -->
+    <img
+      [src]="url"
+      alt=""
+      class="h-20 w-32 shrink-0 rounded-lg border border-slate-200 bg-slate-100 object-cover"
+    />
+  }
+  <div class="min-w-0">
+    <h1 class="text-2xl font-bold tracking-tight">{{ project()?.name ?? '' }}</h1>
+    @if (project()?.note; as note) {
+      <p class="mt-2 text-sm whitespace-pre-line text-slate-600">{{ note }}</p>
+    }
+  </div>
+</div>
+
+<nav aria-label="プロジェクトのメニュー">
+  <ul class="grid gap-3 sm:grid-cols-3">
+    <li>
+      <a
+        [routerLink]="['/projects', projectId(), 'overview']"
+        class="card flex h-full items-center p-4 text-base font-semibold text-indigo-800 transition-colors hover:bg-slate-50"
+      >
+        記録一覧
+      </a>
+    </li>
+    <li>
+      <a
+        [routerLink]="['/projects', projectId(), 'cases']"
+        class="card flex h-full flex-col gap-1 p-4 transition-colors hover:bg-slate-50"
+      >
+        <span class="text-base font-semibold text-indigo-800">ケースマスタ</span>
+        @if (counts(); as counts) {
+          <span class="text-sm text-slate-600">{{ counts.caseCount }} 件</span>
+        }
+      </a>
+    </li>
+    <li>
+      <a
+        [routerLink]="['/projects', projectId(), 'masters']"
+        class="card flex h-full flex-col gap-1 p-4 transition-colors hover:bg-slate-50"
+      >
+        <span class="text-base font-semibold text-indigo-800">オブジェクトマスタ</span>
+        @if (counts(); as counts) {
+          <span class="text-sm text-slate-600">{{ counts.masterCount }} 件</span>
+        }
+      </a>
+    </li>
+  </ul>
+</nav>

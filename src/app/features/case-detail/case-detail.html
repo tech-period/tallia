@@ -1,0 +1,212 @@
+<nav aria-label="パンくずリスト" class="mb-3 text-sm">
+  <ol class="flex flex-wrap items-center gap-1 text-slate-600">
+    <li><a routerLink="/" class="rounded text-indigo-800 hover:underline">プロジェクト</a></li>
+    <li aria-hidden="true">/</li>
+    <li>
+      <a [routerLink]="['/projects', projectId()]" class="rounded text-indigo-800 hover:underline">
+        {{ project()?.name ?? '…' }}
+      </a>
+    </li>
+    <li aria-hidden="true">/</li>
+    <li>
+      <a
+        [routerLink]="['/projects', projectId(), 'overview']"
+        class="rounded text-indigo-800 hover:underline"
+      >
+        記録一覧
+      </a>
+    </li>
+    <li aria-hidden="true">/</li>
+    <li class="font-medium text-slate-800">{{ current()?.name ?? '…' }}</li>
+  </ol>
+</nav>
+
+<app-error-banner [message]="error()" (dismissed)="error.set(null)" />
+
+<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+  <div>
+    <h1 class="text-2xl font-bold tracking-tight">{{ current()?.name ?? '' }}</h1>
+    <p class="mt-1 text-sm text-slate-600">合計 {{ totalQty() }} 個</p>
+    @if (current()?.note; as note) {
+      <p class="mt-2 text-sm whitespace-pre-line text-slate-600">{{ note }}</p>
+    }
+  </div>
+  <button
+    type="button"
+    class="btn btn-primary"
+    [disabled]="availableMasters().length === 0"
+    (click)="openAdd()"
+  >
+    オブジェクトを追加
+  </button>
+</div>
+
+@if (availableMasters().length === 0 && loaded()) {
+  <p class="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+    オブジェクトが未登録です。
+    <a
+      [routerLink]="['/projects', projectId(), 'masters']"
+      class="font-semibold underline underline-offset-2"
+    >
+      登録する
+    </a>
+  </p>
+}
+
+@if (!loaded()) {
+  <p class="text-sm text-slate-600" role="status">読み込み中…</p>
+} @else if (isEmpty()) {
+  <app-empty-state
+    heading="このケースにはまだ記録がありません"
+    description="このケースで手に入れた個数を登録します。"
+  >
+    @if (availableMasters().length > 0) {
+      <button type="button" class="btn btn-primary" (click)="openAdd()">オブジェクトを追加</button>
+    } @else {
+      <a class="btn btn-primary" [routerLink]="['/projects', projectId(), 'masters']">
+        オブジェクトを登録する
+      </a>
+    }
+  </app-empty-state>
+} @else {
+  <div class="mb-4 max-w-sm">
+    <label class="field-label" for="instance-filter">オブジェクト名で絞り込み</label>
+    <input
+      id="instance-filter"
+      class="field-input"
+      type="search"
+      autocomplete="off"
+      [value]="filter()"
+      (input)="onFilterInput($event)"
+    />
+  </div>
+
+  @if (noMatch()) {
+    <p class="card px-4 py-6 text-center text-sm text-slate-600">
+      「{{ filter() }}」に一致するオブジェクトはありません。
+    </p>
+  } @else {
+    <ul class="space-y-2">
+      @for (row of rows(); track row.instance.id) {
+        <li class="card flex flex-wrap items-center gap-3 p-3">
+          @if (imageFor(row.instance.masterId); as imageUrl) {
+            <!-- 装飾目的。オブジェクト名が隣にあるため代替テキストは空にする -->
+            <img
+              [src]="imageUrl"
+              alt=""
+              class="h-12 w-12 shrink-0 rounded-md border border-slate-200 bg-slate-100 object-cover"
+            />
+          }
+          <div class="min-w-0 grow">
+            <p class="font-medium">{{ row.masterName }}</p>
+            <div class="mt-1 flex flex-wrap items-center gap-1">
+              @if (row.masterCategory) {
+                <span class="chip">{{ row.masterCategory }}</span>
+              }
+              @for (tag of row.masterTags; track tag) {
+                <span class="chip">#{{ tag }}</span>
+              }
+            </div>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              class="btn-icon"
+              [attr.aria-label]="row.masterName + ' を 1 減らす'"
+              (click)="changeQty(row, -1)"
+            >
+              <span aria-hidden="true">−</span>
+            </button>
+            <label class="sr-only" [attr.for]="'qty-' + row.instance.id">
+              {{ row.masterName }} の個数
+            </label>
+            <input
+              class="field-input w-20 text-center"
+              type="number"
+              inputmode="numeric"
+              min="0"
+              step="1"
+              [id]="'qty-' + row.instance.id"
+              [value]="row.instance.qty"
+              (change)="setQty(row, $event)"
+            />
+            <button
+              type="button"
+              class="btn-icon"
+              [attr.aria-label]="row.masterName + ' を 1 増やす'"
+              (click)="changeQty(row, 1)"
+            >
+              <span aria-hidden="true">＋</span>
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost text-red-800 hover:bg-red-50"
+              (click)="askDelete(row)"
+            >
+              削除
+            </button>
+          </div>
+        </li>
+      }
+    </ul>
+  }
+}
+
+<app-modal [(open)]="addOpen" heading="オブジェクトを追加">
+  <form id="instance-add-form" (submit)="$event.preventDefault(); add()">
+    <div class="mb-4">
+      <label class="field-label" for="instance-master">オブジェクト（必須）</label>
+      <select
+        id="instance-master"
+        class="field-input"
+        [formField]="addForm.masterId"
+        [attr.aria-invalid]="masterIdError() !== null"
+        [attr.aria-describedby]="masterIdError() ? 'instance-master-error' : null"
+      >
+        <option value="">選択してください</option>
+        @for (master of availableMasters(); track master.id) {
+          <option [value]="master.id">{{ masterName(master) }}</option>
+        }
+      </select>
+      @if (masterIdError(); as message) {
+        <p id="instance-master-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      }
+    </div>
+    <div>
+      <div class="mb-1 flex items-center gap-1">
+        <label class="field-label mb-0" for="instance-qty">個数</label>
+        <app-info-hint
+          label="個数の説明"
+          text="同じオブジェクトがこのケースに登録済みの場合、入力した個数が既存の個数に加算されます。"
+        />
+      </div>
+      <input
+        id="instance-qty"
+        class="field-input w-32"
+        type="number"
+        inputmode="numeric"
+        step="1"
+        [formField]="addForm.qty"
+        [attr.aria-invalid]="qtyError() !== null"
+        [attr.aria-describedby]="qtyError() ? 'instance-qty-error' : null"
+      />
+      @if (qtyError(); as message) {
+        <p id="instance-qty-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      }
+    </div>
+  </form>
+  <div modalFooter class="flex justify-end gap-2">
+    <button type="button" class="btn btn-secondary" (click)="addOpen.set(false)">キャンセル</button>
+    <button type="submit" form="instance-add-form" class="btn btn-primary" [disabled]="busy()">
+      追加
+    </button>
+  </div>
+</app-modal>
+
+<app-confirm-dialog
+  [(open)]="deleteOpen"
+  heading="記録を削除しますか？"
+  [message]="'「' + (deleteTarget()?.masterName ?? '') + '」の記録をこのケースから削除します。'"
+  confirmLabel="記録を削除する"
+  (confirmed)="confirmDelete()"
+/>

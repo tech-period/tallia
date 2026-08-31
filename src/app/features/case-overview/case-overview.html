@@ -1,0 +1,121 @@
+<nav aria-label="パンくずリスト" class="mb-3 text-sm">
+  <ol class="flex flex-wrap items-center gap-1 text-slate-600">
+    <li><a routerLink="/" class="rounded text-indigo-800 hover:underline">プロジェクト</a></li>
+    <li aria-hidden="true">/</li>
+    <li>
+      <a [routerLink]="['/projects', projectId()]" class="rounded text-indigo-800 hover:underline">
+        {{ project()?.name ?? '…' }}
+      </a>
+    </li>
+    <li aria-hidden="true">/</li>
+    <li class="font-medium text-slate-800">記録一覧</li>
+  </ol>
+</nav>
+
+<app-error-banner [message]="error()" (dismissed)="error.set(null)" />
+
+<div class="mb-5 flex items-center gap-1">
+  <h1 class="text-2xl font-bold tracking-tight">記録一覧</h1>
+  <app-info-hint
+    label="この画面の説明"
+    text="ケースを開くと、そのケースに記録したオブジェクトが並びます。個数の編集はケースを開いてからケース詳細へ進んでください。"
+  />
+</div>
+
+@if (!loaded()) {
+  <p class="text-sm text-slate-600" role="status">読み込み中…</p>
+} @else if (isEmpty()) {
+  <app-empty-state
+    heading="まだケースがありません"
+    description="「1章」「地下1階」「1周目」など、記録をまとめたい単位を、メニューの「ケースマスタ」から追加してください。"
+  />
+} @else {
+  <ul class="space-y-2">
+    @for (item of all(); track item.id) {
+      <li class="card overflow-hidden">
+        <h2>
+          <button
+            type="button"
+            class="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-slate-50"
+            [attr.aria-expanded]="isExpanded(item.id)"
+            [attr.aria-controls]="panelId(item.id)"
+            (click)="toggle(item)"
+          >
+            <svg
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              class="h-5 w-5 shrink-0 text-slate-500 transition-transform"
+              [class.rotate-90]="isExpanded(item.id)"
+              aria-hidden="true"
+            >
+              <path d="m7.5 4.5 6 5.5-6 5.5" />
+            </svg>
+            <span class="min-w-0 grow">
+              <span class="block font-semibold">{{ item.name }}</span>
+              <span class="mt-0.5 block text-sm font-normal text-slate-600">
+                合計 {{ totalFor(item.id) }} 個
+              </span>
+            </span>
+          </button>
+        </h2>
+
+        <div
+          [id]="panelId(item.id)"
+          [hidden]="!isExpanded(item.id)"
+          class="border-t border-slate-200 px-4 py-3"
+        >
+          @if (item.note) {
+            <p class="mb-3 text-sm whitespace-pre-line text-slate-600">{{ item.note }}</p>
+          }
+          @if (isPending(item.id)) {
+            <p class="text-sm text-slate-600" role="status">読み込み中…</p>
+          } @else if (rowsFor(item.id); as rows) {
+            @if (rows.length === 0) {
+              <p class="text-sm text-slate-600">このケースにはまだ記録がありません。</p>
+            } @else {
+              <ul class="divide-y divide-slate-100">
+                @for (row of rows; track row.instance.id) {
+                  <li class="flex items-center gap-3 py-2">
+                    @if (imageFor(row.instance.masterId); as imageUrl) {
+                      <!-- 装飾目的。オブジェクト名が隣にあるため代替テキストは空にする -->
+                      <img
+                        [src]="imageUrl"
+                        alt=""
+                        class="h-10 w-10 shrink-0 rounded-md border border-slate-200 bg-slate-100 object-cover"
+                      />
+                    }
+                    <div class="min-w-0 grow">
+                      <p class="text-sm font-medium">{{ row.masterName }}</p>
+                      <div class="mt-0.5 flex flex-wrap items-center gap-1">
+                        @if (row.masterCategory) {
+                          <span class="chip">{{ row.masterCategory }}</span>
+                        }
+                        @for (tag of row.masterTags; track tag) {
+                          <span class="chip">#{{ tag }}</span>
+                        }
+                      </div>
+                    </div>
+                    <span class="shrink-0 text-sm tabular-nums">{{ row.instance.qty }} 個</span>
+                  </li>
+                }
+              </ul>
+            }
+          }
+          <div class="mt-3">
+            <a
+              class="btn btn-secondary"
+              [routerLink]="['/projects', projectId(), 'cases', item.id]"
+              [attr.aria-label]="'「' + item.name + '」の記録を編集'"
+            >
+              記録を編集
+            </a>
+          </div>
+        </div>
+      </li>
+    }
+  </ul>
+}
