@@ -1,22 +1,10 @@
 import { Component, computed, effect, inject, input, signal } from '@angular/core';
 import { FormField, form, maxLength, required } from '@angular/forms/signals';
 import { Router, RouterLink } from '@angular/router';
-import {
-  MASTER_FILE_EXTENSION,
-  ImagePayload,
-  Master,
-  MasterFile,
-  Project,
-} from '../../core/db/schema';
+import { ImagePayload, Master, Project } from '../../core/db/schema';
 import { CategoryService } from '../../core/services/category.service';
 import { toMessage } from '../../core/services/errors';
 import { MasterImageService } from '../../core/services/master-image.service';
-import {
-  MasterImportMode,
-  MasterImportPreview,
-  MasterImportResult,
-  MasterTransferService,
-} from '../../core/services/master-transfer.service';
 import { MasterService, MasterUsage } from '../../core/services/master.service';
 import { ProjectService } from '../../core/services/project.service';
 import { TagService } from '../../core/services/tag.service';
@@ -69,7 +57,6 @@ export class MasterList {
   private readonly categoryMaster = inject(CategoryService);
   private readonly tagMaster = inject(TagService);
   private readonly images = inject(MasterImageService);
-  private readonly transfer = inject(MasterTransferService);
   private readonly router = inject(Router);
 
   protected readonly project = signal<Project | null>(null);
@@ -83,7 +70,6 @@ export class MasterList {
   private readonly tagNames = this.tagMaster.namesById;
 
   protected readonly error = signal<string | null>(null);
-  protected readonly notice = signal<string | null>(null);
   protected readonly busy = signal(false);
 
   protected readonly nameFilter = signal('');
@@ -200,16 +186,6 @@ export class MasterList {
   protected readonly deleteOpen = signal(false);
   protected readonly deleteTarget = signal<Master | null>(null);
 
-  /** 移し替えパネルの開閉。初期表示は閉じておく */
-  protected readonly transferOpen = signal(false);
-  protected readonly fileExtension = MASTER_FILE_EXTENSION;
-  /** 選択されたファイルを検証したものと、取り込んだ場合の見積もり */
-  protected readonly pendingFile = signal<MasterFile | null>(null);
-  protected readonly pendingFileName = signal('');
-  protected readonly pendingPreview = signal<MasterImportPreview | null>(null);
-  protected readonly importMode = signal<MasterImportMode>('skip');
-  protected readonly overwriteOpen = signal(false);
-
   constructor() {
     effect(() => {
       const id = this.projectId();
@@ -307,7 +283,7 @@ export class MasterList {
     this.selectedTagIds.set([...master.tagIds]);
     this.setImage(null);
     this.editorOpen.set(true);
-    this.reset();
+    this.error.set(null);
     try {
       this.setImage(await this.images.get(master.id));
     } catch (error) {
@@ -325,7 +301,7 @@ export class MasterList {
     const tagIds = this.selectedTagIds();
     const id = this.editingId();
     this.busy.set(true);
-    this.reset();
+    this.error.set(null);
     try {
       const saved = id
         ? await this.masters.update(id, { name, categoryId, tagIds, note })
@@ -350,7 +326,7 @@ export class MasterList {
       return;
     }
     this.busy.set(true);
-    this.reset();
+    this.error.set(null);
     try {
       // 使用中の場合は MasterInUseError が投げられる
       await this.masters.delete(target.id);
@@ -360,92 +336,6 @@ export class MasterList {
     } finally {
       this.busy.set(false);
     }
-  }
-
-  /** このプロジェクトのオブジェクトマスタを `.tallia` ファイルに書き出す */
-  protected async exportMasters(): Promise<void> {
-    this.reset();
-    try {
-      const file = await this.transfer.exportProject(this.projectId());
-      const name = this.project()?.name ?? '';
-      this.transfer.download(file, this.transfer.fileName(name));
-      this.notice.set('オブジェクトマスタを書き出しました。');
-    } catch (error) {
-      this.error.set(toMessage(error));
-    }
-  }
-
-  /** 選んだファイルを検証し、取り込んだ場合の見積もりを出す（まだ書き込まない） */
-  protected async onTransferFileSelected(event: Event): Promise<void> {
-    const input = event.target as HTMLInputElement;
-    const file = input.files?.[0];
-    if (!file) {
-      return;
-    }
-    this.reset();
-    this.clearPendingFile();
-    try {
-      const parsed = this.transfer.parse(await file.text());
-      this.pendingPreview.set(await this.transfer.preview(this.projectId(), parsed));
-      this.pendingFile.set(parsed);
-      this.pendingFileName.set(file.name);
-    } catch (error) {
-      this.error.set(toMessage(error));
-    } finally {
-      // 同じファイルを選び直せるように値をクリアする
-      input.value = '';
-    }
-  }
-
-  protected setImportMode(mode: MasterImportMode): void {
-    this.importMode.set(mode);
-  }
-
-  /** 上書きで実際に置き換わるものがあるときだけ確認を挟む */
-  protected startImport(): void {
-    if (!this.pendingFile()) {
-      return;
-    }
-    const mode = this.importMode();
-    if (mode === 'overwrite' && (this.pendingPreview()?.existing ?? 0) > 0) {
-      this.overwriteOpen.set(true);
-      return;
-    }
-    void this.runImport(mode);
-  }
-
-  protected confirmOverwrite(): void {
-    void this.runImport('overwrite');
-  }
-
-  private async runImport(mode: MasterImportMode): Promise<void> {
-    const file = this.pendingFile();
-    if (!file) {
-      return;
-    }
-    this.reset();
-    this.busy.set(true);
-    try {
-      const result = await this.transfer.import(this.projectId(), file, mode);
-      this.clearPendingFile();
-      await this.load(this.projectId());
-      this.notice.set(importedMessage(result));
-    } catch (error) {
-      this.error.set(toMessage(error));
-    } finally {
-      this.busy.set(false);
-    }
-  }
-
-  private clearPendingFile(): void {
-    this.pendingFile.set(null);
-    this.pendingFileName.set('');
-    this.pendingPreview.set(null);
-  }
-
-  private reset(): void {
-    this.error.set(null);
-    this.notice.set(null);
   }
 
   /** 画像は差し替えがあったときだけ書き込む */
@@ -483,23 +373,4 @@ export class MasterList {
       this.error.set(toMessage(error));
     }
   }
-}
-
-/** 取り込み結果を利用者向けの 1 行にする。0 件の項目は出さない */
-function importedMessage(result: MasterImportResult): string {
-  const parts = [`追加 ${result.added} 件`];
-  if (result.updated > 0) {
-    parts.push(`上書き ${result.updated} 件`);
-  }
-  if (result.skipped > 0) {
-    parts.push(`同名のため見送り ${result.skipped} 件`);
-  }
-  if (result.images > 0) {
-    parts.push(`画像 ${result.images} 枚`);
-  }
-  const labels = result.categories + result.tags;
-  if (labels > 0) {
-    parts.push(`新しい分類 ${labels} 件`);
-  }
-  return `取り込みました（${parts.join(' / ')}）。`;
 }

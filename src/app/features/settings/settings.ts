@@ -1,7 +1,15 @@
 import { Component, computed, inject, signal } from '@angular/core';
-import { BackupFile, Project } from '../../core/db/schema';
+import { MASTER_FILE_EXTENSION, BackupFile, MasterFile, Project } from '../../core/db/schema';
 import { BackupService, ImportMode, ImportResult } from '../../core/services/backup.service';
 import { toMessage } from '../../core/services/errors';
+import {
+  MasterCounts,
+  MasterImportMode,
+  MasterImportPreview,
+  MasterImportResult,
+  MasterTransferService,
+  total,
+} from '../../core/services/master-transfer.service';
 import { ProjectService } from '../../core/services/project.service';
 import { StorageService } from '../../core/services/storage.service';
 import { ConfirmDialog } from '../../shared/components/confirm-dialog';
@@ -17,6 +25,7 @@ import { inputValue } from '../../shared/utils/form';
 })
 export class Settings {
   private readonly backup = inject(BackupService);
+  private readonly transfer = inject(MasterTransferService);
   private readonly projects = inject(ProjectService);
   private readonly storage = inject(StorageService);
 
@@ -50,6 +59,28 @@ export class Settings {
       images: (file.images?.length ?? 0) + (file.masterImages?.length ?? 0),
       exportedAt: file.exportedAt,
     };
+  });
+
+  /* --- マスタの移し替え（マスタ 4 種をプロジェクト間で持ち運ぶ） --- */
+
+  protected readonly fileExtension = MASTER_FILE_EXTENSION;
+  /** 書き出し元と取り込み先。どちらもプロジェクトを選ばせる */
+  protected readonly transferExportProjectId = signal('');
+  protected readonly transferImportProjectId = signal('');
+  /** 選択されたファイルを検証したものと、取り込んだ場合の見積もり */
+  protected readonly transferFile = signal<MasterFile | null>(null);
+  protected readonly transferFileName = signal('');
+  protected readonly transferPreview = signal<MasterImportPreview | null>(null);
+  protected readonly transferMode = signal<MasterImportMode>('skip');
+  protected readonly transferOverwriteOpen = signal(false);
+  /** 取り込み先を選び直したら見積もりを取り直す必要がある */
+  protected readonly transferReady = computed(
+    () => this.transferFile() !== null && this.transferPreview() !== null,
+  );
+  /** 同名が 1 件も無ければ、取り込み方を選ばせる意味がない */
+  protected readonly transferHasExisting = computed(() => {
+    const preview = this.transferPreview();
+    return preview !== null && total(preview.existing) > 0;
   });
 
   /** 置換インポートの二段階確認 */
@@ -224,6 +255,113 @@ export class Settings {
     }
   }
 
+  /* --- マスタの移し替え --- */
+
+  protected onTransferExportProjectChange(event: Event): void {
+    this.transferExportProjectId.set(inputValue(event));
+  }
+
+  /** 取り込み先が変われば、既に選ばれているファイルの見積もりを取り直す */
+  protected async onTransferImportProjectChange(event: Event): Promise<void> {
+    this.transferImportProjectId.set(inputValue(event));
+    await this.refreshTransferPreview();
+  }
+
+  protected async exportMasters(): Promise<void> {
+    const projectId = this.transferExportProjectId();
+    if (!projectId) {
+      this.error.set('書き出すプロジェクトを選んでください。');
+      return;
+    }
+    this.reset();
+    try {
+      const project = this.allProjects().find((p: Project) => p.id === projectId);
+      const file = await this.transfer.exportProject(projectId);
+      this.transfer.download(file, this.transfer.fileName(project?.name ?? ''));
+      this.notice.set(`「${project?.name ?? ''}」のマスタを書き出しました。`);
+    } catch (error) {
+      this.error.set(toMessage(error));
+    }
+  }
+
+  /** 選んだファイルを検証する。見積もりは取り込み先が決まってから出す */
+  protected async onTransferFileSelected(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) {
+      return;
+    }
+    this.reset();
+    this.clearTransferFile();
+    try {
+      this.transferFile.set(this.transfer.parse(await file.text()));
+      this.transferFileName.set(file.name);
+      await this.refreshTransferPreview();
+    } catch (error) {
+      this.error.set(toMessage(error));
+    } finally {
+      // 同じファイルを選び直せるように値をクリアする
+      input.value = '';
+    }
+  }
+
+  protected setTransferMode(mode: MasterImportMode): void {
+    this.transferMode.set(mode);
+  }
+
+  /** 上書きで実際に置き換わるものがあるときだけ確認を挟む */
+  protected startTransferImport(): void {
+    if (!this.transferReady()) {
+      return;
+    }
+    const mode = this.transferMode();
+    if (mode === 'overwrite' && this.transferHasExisting()) {
+      this.transferOverwriteOpen.set(true);
+      return;
+    }
+    void this.runTransferImport(mode);
+  }
+
+  protected confirmTransferOverwrite(): void {
+    void this.runTransferImport('overwrite');
+  }
+
+  private async refreshTransferPreview(): Promise<void> {
+    const file = this.transferFile();
+    const projectId = this.transferImportProjectId();
+    if (!file || !projectId) {
+      this.transferPreview.set(null);
+      return;
+    }
+    this.transferPreview.set(await this.transfer.preview(projectId, file));
+  }
+
+  private async runTransferImport(mode: MasterImportMode): Promise<void> {
+    const file = this.transferFile();
+    const projectId = this.transferImportProjectId();
+    if (!file || !projectId) {
+      return;
+    }
+    this.reset();
+    this.busy.set(true);
+    try {
+      const result = await this.transfer.import(projectId, file, mode);
+      this.clearTransferFile();
+      await this.refresh();
+      this.notice.set(transferredMessage(result));
+    } catch (error) {
+      this.error.set(toMessage(error));
+    } finally {
+      this.busy.set(false);
+    }
+  }
+
+  private clearTransferFile(): void {
+    this.transferFile.set(null);
+    this.transferFileName.set('');
+    this.transferPreview.set(null);
+  }
+
   private importedMessage(mode: ImportMode, result: ImportResult): string {
     const label = mode === 'append' ? '追加' : '置換';
     return (
@@ -256,4 +394,34 @@ function formatBytes(bytes: number): string {
     unit++;
   }
   return `${Math.round(value * 10) / 10} ${units[unit]}`;
+}
+
+/** 取り込み結果を利用者向けの 1 行にする。0 件の内訳は出さない */
+function transferredMessage(result: MasterImportResult): string {
+  const parts: string[] = [`追加 ${breakdown(result.added)}`];
+  if (total(result.updated) > 0) {
+    parts.push(`上書き ${breakdown(result.updated)}`);
+  }
+  if (total(result.skipped) > 0) {
+    parts.push(`同名のため見送り ${total(result.skipped)} 件`);
+  }
+  if (result.images > 0) {
+    parts.push(`画像 ${result.images} 枚`);
+  }
+  return `マスタを取り込みました（${parts.join(' / ')}）。`;
+}
+
+/** 「12 件（ケース 3・オブジェクト 9）」のように内訳を添える */
+function breakdown(counts: MasterCounts): string {
+  const labels: [string, number][] = [
+    ['ケース', counts.cases],
+    ['カテゴリ', counts.categories],
+    ['タグ', counts.tags],
+    ['オブジェクト', counts.masters],
+  ];
+  const detail = labels
+    .filter(([, count]) => count > 0)
+    .map(([name, count]) => `${name} ${count}`)
+    .join('・');
+  return detail ? `${total(counts)} 件（${detail}）` : '0 件';
 }

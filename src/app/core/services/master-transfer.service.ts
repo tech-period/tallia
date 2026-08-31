@@ -1,18 +1,21 @@
 import { Service, inject } from '@angular/core';
 import { runTransaction } from '../db/database';
 import {
+  Case,
   Label,
   MASTER_FILE_EXTENSION,
   MASTER_FILE_FORMAT,
   MASTER_FILE_VERSION,
   Master,
   MasterFile,
-  MasterFileEntry,
+  MasterFileCase,
   MasterFileImage,
+  MasterFileObject,
   MasterImage,
   StoredImage,
   SUPPORTED_MASTER_FILE_VERSIONS,
 } from '../db/schema';
+import { CaseRepository } from '../repositories/case.repository';
 import { CategoryRepository } from '../repositories/category.repository';
 import { MasterImageRepository } from '../repositories/master-image.repository';
 import { MasterRepository } from '../repositories/master.repository';
@@ -24,82 +27,94 @@ import { base64ToBytes, bytesToBase64 } from '../../shared/utils/image';
 import { InvalidMasterFileError, NotFoundError } from './errors';
 import { MasterImageService } from './master-image.service';
 
-/** 取り込み先に同名のオブジェクトがあったときの扱い */
+/** 取り込み先に同名のレコードがあったときの扱い */
 export type MasterImportMode = 'skip' | 'overwrite';
+
+/** マスタの種類ごとの内訳。画面ではこの並びで表に出す */
+export interface MasterCounts {
+  cases: number;
+  categories: number;
+  tags: number;
+  masters: number;
+}
 
 /** 取り込む前に見せる見積もり。実際の書き込みは行わない */
 export interface MasterImportPreview {
-  /** 新しく追加されるオブジェクト */
-  added: number;
-  /** 同名が既にあるオブジェクト（モードによって飛ばす / 上書きする） */
-  existing: number;
+  /** 新しく追加されるもの */
+  added: MasterCounts;
+  /** 同名が既にあるもの（モードによって飛ばす / 上書きする） */
+  existing: MasterCounts;
   /** ファイルに含まれる画像 */
   images: number;
-  /** 新しく作られるカテゴリ */
-  newCategories: number;
-  /** 新しく作られるタグ */
-  newTags: number;
 }
 
 export interface MasterImportResult {
-  added: number;
-  updated: number;
-  skipped: number;
+  added: MasterCounts;
+  /** 上書きしたもの。カテゴリ / タグは名前しか持たないため常に 0 */
+  updated: MasterCounts;
+  /** 同名のため手を触れなかったもの */
+  skipped: MasterCounts;
   /** 実際に保存できた画像。壊れていた画像は含まない */
   images: number;
-  /** 新しく作ったカテゴリ */
-  categories: number;
-  /** 新しく作ったタグ */
-  tags: number;
 }
 
 /**
- * オブジェクトマスタをプロジェクト間で移し替える。
+ * マスタ 4 種（ケース / カテゴリ / タグ / オブジェクト）をプロジェクト間で移し替える。
  *
  * バックアップ（`BackupService`）が「同じデータをそのまま復元する」のに対し、
- * こちらは「別のプロジェクトへ定義だけを持っていく」ためのもの。
- * ケースや記録（Instance）は移し替え先で意味を持たないので対象外にしている。
+ * こちらは「別のプロジェクトへマスタの定義だけを配る」ためのもの。
+ * 記録した個数（Instance）は移し替え先で意味を持たないので対象外にしている。
  *
- * ID を運ばない代わりに、突合はオブジェクト名で行う（`by-project-name` により
- * 名前はプロジェクト内で一意）。カテゴリ・タグも名前で解決し、無ければ作る。
+ * ID を運ばない代わりに、突合は名前で行う（いずれのマスタも `by-project-name` により
+ * 名前はプロジェクト内で一意）。オブジェクトとカテゴリ / タグの紐付けも名前で運び、
+ * 取り込み時に移し替え先の ID へ解決し直す。
  */
 @Service()
 export class MasterTransferService {
   private readonly projects = inject(ProjectRepository);
-  private readonly masters = inject(MasterRepository);
+  private readonly cases = inject(CaseRepository);
   private readonly categories = inject(CategoryRepository);
   private readonly tags = inject(TagRepository);
+  private readonly masters = inject(MasterRepository);
   private readonly imageRecords = inject(MasterImageRepository);
   private readonly images = inject(MasterImageService);
 
-  /** 指定プロジェクトのオブジェクトマスタを、カテゴリ・タグ・画像ごと書き出す */
+  /** 指定プロジェクトのマスタを、オブジェクトのイメージ画像ごと書き出す */
   async exportProject(projectId: string): Promise<MasterFile> {
     const project = await this.projects.getById(projectId);
     if (!project) {
       throw new NotFoundError('プロジェクト', projectId);
     }
-    const [masters, categories, tags, images] = await Promise.all([
-      this.masters.getByProject(projectId),
+    const [cases, categories, tags, masters, images] = await Promise.all([
+      this.cases.getByProject(projectId),
       this.categories.getByProject(projectId),
       this.tags.getByProject(projectId),
+      this.masters.getByProject(projectId),
       this.imageRecords.getByProject(projectId),
     ]);
-
-    const categoryNames = new Map(categories.map((category) => [category.id, category.name]));
-    const tagNames = new Map(tags.map((tag) => [tag.id, tag.name]));
     const imagesByMaster = new Map(images.map((image) => [image.masterId, image]));
+    // 紐付けは ID ではなく名前で運ぶ。参照先が消えているものは落とす
+    const categoryNames = new Map(categories.map((label) => [label.id, label.name]));
+    const tagNames = new Map(tags.map((label) => [label.id, label.name]));
 
     return {
       format: MASTER_FILE_FORMAT,
       version: MASTER_FILE_VERSION,
       exportedAt: nowIso(),
       source: { projectName: project.name },
-      categories: sortedNames(categories),
-      tags: sortedNames(tags),
-      // 差分を見比べやすいよう名前順で固定する
+      // ケース・カテゴリ・タグは表示順のまま並べる
+      cases: byOrder(cases).map((target) => ({
+        name: target.name,
+        ...(target.note ? { note: target.note } : {}),
+      })),
+      categories: byOrder(categories).map((label) => label.name),
+      tags: byOrder(tags).map((label) => label.name),
+      // オブジェクトには表示順が無いので、差分を見比べやすい名前順で固定する
       masters: [...masters]
         .sort((a, b) => a.name.localeCompare(b.name, 'ja'))
-        .map((master) => toEntry(master, categoryNames, tagNames, imagesByMaster.get(master.id))),
+        .map((master) =>
+          toObjectEntry(master, imagesByMaster.get(master.id), categoryNames, tagNames),
+        ),
     };
   }
 
@@ -115,7 +130,7 @@ export class MasterTransferService {
 
   /**
    * ファイルの中身を検証して `MasterFile` にする。
-   * 名前を持たない行と、ファイル内で名前が重複した 2 件目以降は落とす
+   * 名前を持たない行と、同じ配列の中で名前が重複した 2 件目以降は落とす
    * （名前がプロジェクト内で一意という前提を、取り込み前にここで担保する）。
    */
   parse(text: string): MasterFile {
@@ -134,7 +149,7 @@ export class MasterTransferService {
     const candidate = raw as Partial<MasterFile>;
     if (candidate.format !== MASTER_FILE_FORMAT) {
       throw new InvalidMasterFileError(
-        `このファイルはオブジェクトマスタの移し替え用ではありません（format: ${String(candidate.format)}）。`,
+        `このファイルはマスタの移し替え用ではありません（format: ${String(candidate.format)}）。`,
       );
     }
     if (
@@ -145,16 +160,8 @@ export class MasterTransferService {
         `対応していない形式です（version: ${String(candidate.version)}、対応: ${SUPPORTED_MASTER_FILE_VERSIONS.join(' / ')}）。`,
       );
     }
-    if (!Array.isArray(candidate.masters)) {
-      throw new InvalidMasterFileError('ファイルの構造が壊れています（masters）。');
-    }
 
-    const masters = normalizeEntries(candidate.masters);
-    if (masters.length === 0) {
-      throw new InvalidMasterFileError('取り込めるオブジェクトが 1 件もありませんでした。');
-    }
-
-    return {
+    const file: MasterFile = {
       format: MASTER_FILE_FORMAT,
       version: candidate.version,
       exportedAt: typeof candidate.exportedAt === 'string' ? candidate.exportedAt : nowIso(),
@@ -162,54 +169,59 @@ export class MasterTransferService {
         projectName:
           typeof candidate.source?.projectName === 'string' ? candidate.source.projectName : '',
       },
+      cases: normalizeCases(candidate.cases),
       categories: normalizeNames(candidate.categories),
       tags: normalizeNames(candidate.tags),
-      masters,
+      masters: normalizeObjects(candidate.masters),
     };
+    // 分類の一覧に無い名前がオブジェクトから参照されていたら、一覧の側へ補う。
+    // 「オブジェクトが参照する名前は必ず一覧にある」という前提を、ここで担保する
+    appendMissingNames(
+      file.categories,
+      file.masters.map((master) => master.category),
+    );
+    appendMissingNames(
+      file.tags,
+      file.masters.flatMap((master) => master.tags ?? []),
+    );
+    if (total(countOf(file)) === 0) {
+      throw new InvalidMasterFileError('取り込めるマスタが 1 件もありませんでした。');
+    }
+    return file;
   }
 
   /** 取り込み先の現状と突き合わせて、何が起きるかを数える */
   async preview(projectId: string, file: MasterFile): Promise<MasterImportPreview> {
-    const [masters, categories, tags] = await Promise.all([
-      this.masters.getByProject(projectId),
+    const [cases, categories, tags, masters] = await Promise.all([
+      this.cases.getByProject(projectId),
       this.categories.getByProject(projectId),
       this.tags.getByProject(projectId),
+      this.masters.getByProject(projectId),
     ]);
-    const masterNames = new Set(masters.map((master) => master.name));
-    const categoryNames = new Set(categories.map((category) => category.name));
-    const tagNames = new Set(tags.map((tag) => tag.name));
 
-    // 宣言されている分類と、オブジェクトから参照されている分類の両方を数える
-    const newCategories = new Set(file.categories.filter((name) => !categoryNames.has(name)));
-    const newTags = new Set(file.tags.filter((name) => !tagNames.has(name)));
-    let added = 0;
-    let existing = 0;
-    let images = 0;
-    for (const entry of file.masters) {
-      if (masterNames.has(entry.name)) {
-        existing += 1;
-      } else {
-        added += 1;
-      }
-      if (entry.image) {
-        images += 1;
-      }
-      if (entry.category && !categoryNames.has(entry.category)) {
-        newCategories.add(entry.category);
-      }
-      for (const tag of entry.tags) {
-        if (!tagNames.has(tag)) {
-          newTags.add(tag);
-        }
-      }
-    }
+    const existing: MasterCounts = {
+      cases: countExisting(
+        file.cases.map((target) => target.name),
+        cases,
+      ),
+      categories: countExisting(file.categories, categories),
+      tags: countExisting(file.tags, tags),
+      masters: countExisting(
+        file.masters.map((master) => master.name),
+        masters,
+      ),
+    };
+    const inFile = countOf(file);
 
     return {
-      added,
+      added: {
+        cases: inFile.cases - existing.cases,
+        categories: inFile.categories - existing.categories,
+        tags: inFile.tags - existing.tags,
+        masters: inFile.masters - existing.masters,
+      },
       existing,
-      images,
-      newCategories: newCategories.size,
-      newTags: newTags.size,
+      images: file.masters.filter((master) => master.image).length,
     };
   }
 
@@ -217,9 +229,10 @@ export class MasterTransferService {
    * ファイルの内容を `projectId` のプロジェクトへ取り込む。
    * 単一トランザクションで実行し、途中で失敗した場合はロールバックする。
    *
-   * `skip` は同名のオブジェクトを飛ばし、`overwrite` はカテゴリ・タグ・メモ・画像を
+   * 同名のレコードは `skip` なら手を触れず、`overwrite` ならメモと画像を
    * ファイルの内容で置き換える（ファイルに画像が無ければ既存の画像も消す）。
-   * どちらのモードでも、既存のオブジェクトが消えることはない。
+   * カテゴリ / タグは名前しか持たないため、同名があればどちらのモードでも何もしない。
+   * どのモードでも、既存のレコードが削除されることはない。
    */
   async import(
     projectId: string,
@@ -233,84 +246,108 @@ export class MasterTransferService {
 
     // トランザクションは待機している間に自動コミットされるため、
     // base64 のデコードは開始前に済ませておく
-    const decoded = file.masters.map((entry) => (entry.image ? decodeImage(entry.image) : null));
+    const decoded = file.masters.map((master) => (master.image ? decodeImage(master.image) : null));
 
     const result: MasterImportResult = {
-      added: 0,
-      updated: 0,
-      skipped: 0,
+      added: emptyCounts(),
+      updated: emptyCounts(),
+      skipped: emptyCounts(),
       images: 0,
-      categories: 0,
-      tags: 0,
     };
 
     await runTransaction(async (tx) => {
-      const [existingMasters, existingCategories, existingTags] = await Promise.all([
-        this.masters.getByProject(projectId, tx),
+      const [existingCases, existingCategories, existingTags, existingMasters] = await Promise.all([
+        this.cases.getByProject(projectId, tx),
         this.categories.getByProject(projectId, tx),
         this.tags.getByProject(projectId, tx),
+        this.masters.getByProject(projectId, tx),
       ]);
-
-      const mastersByName = new Map(existingMasters.map((master) => [master.name, master]));
       const timestamp = nowIso();
-      const categories = new LabelResolver(existingCategories, projectId, timestamp);
-      const tags = new LabelResolver(existingTags, projectId, timestamp);
-      const ensureCategory = async (name: string): Promise<string> => {
-        const { id, created } = categories.resolve(name);
-        if (created) {
-          await this.categories.put(created, tx);
-          result.categories += 1;
-        }
-        return id;
-      };
-      const ensureTag = async (name: string): Promise<string> => {
-        const { id, created } = tags.resolve(name);
-        if (created) {
-          await this.tags.put(created, tx);
-          result.tags += 1;
-        }
-        return id;
-      };
 
-      // 参照されていない分類も、ファイルの並び順のまま先に作っておく
-      for (const name of file.categories) {
-        await ensureCategory(name);
-      }
-      for (const name of file.tags) {
-        await ensureTag(name);
+      // --- ケースマスタ ---
+      const casesByName = new Map(existingCases.map((target) => [target.name, target]));
+      let caseOrder = maxOrder(existingCases);
+      for (const entry of file.cases) {
+        const existing = casesByName.get(entry.name);
+        if (!existing) {
+          caseOrder += 1;
+          const created: Case = {
+            id: newId(),
+            projectId,
+            name: entry.name,
+            ...(entry.note ? { note: entry.note } : {}),
+            order: caseOrder,
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          };
+          await this.cases.put(created, tx);
+          result.added.cases += 1;
+        } else if (mode === 'overwrite') {
+          const updated: Case = { ...existing, updatedAt: timestamp };
+          if (entry.note) {
+            updated.note = entry.note;
+          } else {
+            delete updated.note;
+          }
+          await this.cases.put(updated, tx);
+          result.updated.cases += 1;
+        } else {
+          result.skipped.cases += 1;
+        }
       }
 
+      // --- カテゴリマスタ / タグマスタ ---
+      // 名前しか持たないため、同名があればモードに関わらず何もしない。
+      // オブジェクトより先に片付けて、紐付けを解決するための名前 → ID を用意する
+      const categoryIds = await this.putNewLabels(
+        file.categories,
+        existingCategories,
+        (label) => this.categories.put(label, tx),
+        projectId,
+        timestamp,
+      );
+      result.added.categories = categoryIds.size - existingCategories.length;
+      result.skipped.categories = file.categories.length - result.added.categories;
+      const tagIds = await this.putNewLabels(
+        file.tags,
+        existingTags,
+        (label) => this.tags.put(label, tx),
+        projectId,
+        timestamp,
+      );
+      result.added.tags = tagIds.size - existingTags.length;
+      result.skipped.tags = file.tags.length - result.added.tags;
+
+      // --- オブジェクトマスタ ---
+      const mastersByName = new Map(existingMasters.map((master) => [master.name, master]));
       for (const [index, entry] of file.masters.entries()) {
         const existing = mastersByName.get(entry.name);
         if (existing && mode === 'skip') {
-          result.skipped += 1;
+          result.skipped.masters += 1;
           continue;
         }
 
-        const categoryId = entry.category ? await ensureCategory(entry.category) : undefined;
-        const tagIds: string[] = [];
-        for (const tag of entry.tags) {
-          const id = await ensureTag(tag);
-          if (!tagIds.includes(id)) {
-            tagIds.push(id);
-          }
-        }
-
         const master: Master = existing
-          ? { ...existing, tagIds, updatedAt: timestamp }
+          ? { ...existing, updatedAt: timestamp }
           : {
               id: newId(),
               projectId,
               name: entry.name,
-              tagIds,
+              tagIds: [],
               createdAt: timestamp,
               updatedAt: timestamp,
             };
+        // 紐付けは移し替え先の ID に解決し直す。
+        // 上書きのときはメモや画像と同じく、ファイルの内容で置き換える
+        const categoryId = entry.category ? categoryIds.get(entry.category) : undefined;
         if (categoryId) {
           master.categoryId = categoryId;
         } else {
           delete master.categoryId;
         }
+        master.tagIds = (entry.tags ?? [])
+          .map((name) => tagIds.get(name))
+          .filter((id): id is string => id !== undefined);
         if (entry.note) {
           master.note = entry.note;
         } else {
@@ -329,9 +366,9 @@ export class MasterTransferService {
         }
 
         if (existing) {
-          result.updated += 1;
+          result.updated.masters += 1;
         } else {
-          result.added += 1;
+          result.added.masters += 1;
         }
       }
     });
@@ -342,67 +379,94 @@ export class MasterTransferService {
 
     return result;
   }
-}
 
-/**
- * 名前から分類マスタの ID を引き、無ければ作る。
- * `order` は取り込み先の末尾から連番で伸ばす。
- */
-class LabelResolver {
-  private readonly ids: Map<string, string>;
-  private order: number;
-
-  constructor(
+  /**
+   * 取り込み先に無い名前だけを分類マスタへ追加し、名前 → ID の対応表を返す。
+   * 対応表には取り込み先の既存分も入れる（オブジェクトの紐付けを解決するため）。
+   * `order` は取り込み先の末尾から連番で伸ばす。
+   */
+  private async putNewLabels(
+    names: readonly string[],
     existing: readonly Label[],
-    private readonly projectId: string,
-    private readonly timestamp: string,
-  ) {
-    this.ids = new Map(existing.map((label) => [label.name, label.id]));
-    this.order = existing.reduce((max, label) => Math.max(max, label.order), -1);
-  }
-
-  /** `created` が返ったときだけ、呼び出し側が保存する */
-  resolve(name: string): { id: string; created: Label | null } {
-    const known = this.ids.get(name);
-    if (known) {
-      return { id: known, created: null };
+    put: (label: Label) => Promise<void>,
+    projectId: string,
+    timestamp: string,
+  ): Promise<Map<string, string>> {
+    const ids = new Map(existing.map((label) => [label.name, label.id]));
+    let order = maxOrder(existing);
+    for (const name of names) {
+      if (ids.has(name)) {
+        continue;
+      }
+      order += 1;
+      const id = newId();
+      await put({
+        id,
+        projectId,
+        name,
+        order,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      });
+      ids.set(name, id);
     }
-    this.order += 1;
-    const label: Label = {
-      id: newId(),
-      projectId: this.projectId,
-      name,
-      order: this.order,
-      createdAt: this.timestamp,
-      updatedAt: this.timestamp,
-    };
-    this.ids.set(name, label.id);
-    return { id: label.id, created: label };
+    return ids;
   }
 }
 
-/** `order` 順に並べた名前の配列 */
-function sortedNames(labels: readonly Label[]): string[] {
-  return [...labels].sort((a, b) => a.order - b.order).map((label) => label.name);
+/** マスタの種類ごとの内訳をすべて 0 で作る */
+export function emptyCounts(): MasterCounts {
+  return { cases: 0, categories: 0, tags: 0, masters: 0 };
 }
 
-/** 保存済みのレコードを、ファイルに載せる 1 行にする */
-function toEntry(
+/** 内訳の合計 */
+export function total(counts: MasterCounts): number {
+  return counts.cases + counts.categories + counts.tags + counts.masters;
+}
+
+/** ファイルに入っている件数 */
+function countOf(file: MasterFile): MasterCounts {
+  return {
+    cases: file.cases.length,
+    categories: file.categories.length,
+    tags: file.tags.length,
+    masters: file.masters.length,
+  };
+}
+
+/** 取り込み先に同名が既にあるものを数える */
+function countExisting(names: readonly string[], existing: readonly { name: string }[]): number {
+  const known = new Set(existing.map((record) => record.name));
+  return names.filter((name) => known.has(name)).length;
+}
+
+/** `order` 昇順に並べ直す（元の配列は壊さない） */
+function byOrder<T extends { order: number }>(records: readonly T[]): T[] {
+  return [...records].sort((a, b) => a.order - b.order);
+}
+
+/** 取り込み先の末尾の `order`。1 件も無ければ -1 */
+function maxOrder(records: readonly { order: number }[]): number {
+  return records.reduce((max, record) => Math.max(max, record.order), -1);
+}
+
+/** 保存済みのオブジェクトを、ファイルに載せる 1 行にする */
+function toObjectEntry(
   master: Master,
+  image: MasterImage | undefined,
   categoryNames: ReadonlyMap<string, string>,
   tagNames: ReadonlyMap<string, string>,
-  image: MasterImage | undefined,
-): MasterFileEntry {
-  const entry: MasterFileEntry = {
-    name: master.name,
-    // 参照先が消えているタグは名前を出せないので落とす
-    tags: master.tagIds
-      .map((id) => tagNames.get(id))
-      .filter((name): name is string => name !== undefined),
-  };
+): MasterFileObject {
+  const entry: MasterFileObject = { name: master.name };
   const category = master.categoryId ? categoryNames.get(master.categoryId) : undefined;
   if (category) {
     entry.category = category;
+  }
+  const tags = master.tagIds
+    .map((id) => tagNames.get(id))
+    .filter((name): name is string => name !== undefined);
+  if (tags.length > 0) {
+    entry.tags = tags;
   }
   if (master.note) {
     entry.note = master.note;
@@ -433,37 +497,78 @@ function normalizeNames(values: unknown): string[] {
   return names;
 }
 
-/** ファイルの `masters` を検証して整える。名前が無い / 重複した行は落とす */
-function normalizeEntries(values: readonly unknown[]): MasterFileEntry[] {
-  const entries: MasterFileEntry[] = [];
+/** 分類の一覧に無い名前を、出てきた順に末尾へ足す（配列を直接書き換える） */
+function appendMissingNames(names: string[], referenced: readonly (string | undefined)[]): void {
+  const known = new Set(names);
+  for (const name of referenced) {
+    if (name && !known.has(name)) {
+      names.push(name);
+      known.add(name);
+    }
+  }
+}
+
+/**
+ * 名前を持つレコードの配列を検証して整える。
+ * 名前が無い行と、名前が重複した 2 件目以降は落とす。
+ */
+function normalizeRecords<T extends { name: string }>(
+  values: unknown,
+  build: (name: string, raw: Record<string, unknown>) => T,
+): T[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const records: T[] = [];
   const seen = new Set<string>();
   for (const value of values) {
     if (typeof value !== 'object' || value === null) {
       continue;
     }
-    const raw = value as Partial<MasterFileEntry>;
-    const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+    const raw = value as Record<string, unknown>;
+    const name = typeof raw['name'] === 'string' ? raw['name'].trim() : '';
     if (!name || seen.has(name)) {
       continue;
     }
     seen.add(name);
+    records.push(build(name, raw));
+  }
+  return records;
+}
 
-    const entry: MasterFileEntry = { name, tags: normalizeNames(raw.tags) };
-    const category = typeof raw.category === 'string' ? raw.category.trim() : '';
-    if (category) {
-      entry.category = category;
-    }
-    const note = typeof raw.note === 'string' ? raw.note.trim() : '';
+function normalizeCases(values: unknown): MasterFileCase[] {
+  return normalizeRecords<MasterFileCase>(values, (name, raw) => {
+    const entry: MasterFileCase = { name };
+    const note = typeof raw['note'] === 'string' ? raw['note'].trim() : '';
     if (note) {
       entry.note = note;
     }
-    const image = normalizeImage(raw.image);
+    return entry;
+  });
+}
+
+function normalizeObjects(values: unknown): MasterFileObject[] {
+  return normalizeRecords<MasterFileObject>(values, (name, raw) => {
+    const entry: MasterFileObject = { name };
+    // version 1 のファイルには紐付けが無いので、そのまま「未設定」になる
+    const category = typeof raw['category'] === 'string' ? raw['category'].trim() : '';
+    if (category) {
+      entry.category = category;
+    }
+    const tags = normalizeNames(raw['tags']);
+    if (tags.length > 0) {
+      entry.tags = tags;
+    }
+    const note = typeof raw['note'] === 'string' ? raw['note'].trim() : '';
+    if (note) {
+      entry.note = note;
+    }
+    const image = normalizeImage(raw['image']);
     if (image) {
       entry.image = image;
     }
-    entries.push(entry);
-  }
-  return entries;
+    return entry;
+  });
 }
 
 /** 画像の器だけを検証する。base64 が復元できるかは取り込み時に確かめる */
