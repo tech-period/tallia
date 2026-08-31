@@ -1,0 +1,6 @@
+# ビルド成果物・依存関係・キャッシュ
+/dist
+/node_modules
+/.angular
+/coverage
+package-lock.json

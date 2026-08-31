@@ -1,0 +1,248 @@
+<nav aria-label="パンくずリスト" class="mb-3 text-sm">
+  <ol class="flex flex-wrap items-center gap-1 text-slate-600">
+    <li><a routerLink="/" class="rounded text-indigo-800 hover:underline">プロジェクト</a></li>
+    <li aria-hidden="true">/</li>
+    <li>
+      <a [routerLink]="['/projects', projectId()]" class="rounded text-indigo-800 hover:underline">
+        {{ project()?.name ?? '…' }}
+      </a>
+    </li>
+    <li aria-hidden="true">/</li>
+    <li class="font-medium text-slate-800">オブジェクトマスタ</li>
+  </ol>
+</nav>
+
+<app-error-banner [message]="error()" (dismissed)="error.set(null)" />
+
+<div class="mb-5 flex flex-wrap items-start justify-between gap-3">
+  <div class="flex items-center gap-1">
+    <h1 class="text-2xl font-bold tracking-tight">オブジェクトマスタ</h1>
+    <app-info-hint
+      label="オブジェクトの説明"
+      text="このプロジェクトに登場するアイテム・素材・モンスターなどの定義です。名前やカテゴリはここでだけ管理し、各ケースでは個数だけを記録します。"
+    />
+  </div>
+  <button type="button" class="btn btn-primary" (click)="openCreate()">オブジェクトを追加</button>
+</div>
+
+@if (!loaded()) {
+  <p class="text-sm text-slate-600" role="status">読み込み中…</p>
+} @else if (isEmpty()) {
+  <app-empty-state
+    heading="まだオブジェクトがありません"
+    description="登録すると、各ケースで個数を記録できます。"
+  >
+    <button type="button" class="btn btn-primary" (click)="openCreate()">
+      最初のオブジェクトを追加
+    </button>
+  </app-empty-state>
+} @else {
+  <div class="card mb-4 grid gap-3 p-4 sm:grid-cols-3">
+    <div>
+      <label class="field-label" for="master-name-filter">名前で絞り込み</label>
+      <input
+        id="master-name-filter"
+        class="field-input"
+        type="search"
+        autocomplete="off"
+        [value]="nameFilter()"
+        (input)="onNameFilterInput($event)"
+      />
+    </div>
+    <div>
+      <label class="field-label" for="master-category-filter">カテゴリ</label>
+      <select
+        id="master-category-filter"
+        class="field-input"
+        [value]="categoryFilter()"
+        (change)="onCategoryFilterChange($event)"
+      >
+        <option value="">すべて</option>
+        @for (category of categories(); track category) {
+          <option [value]="category">{{ category }}</option>
+        }
+      </select>
+    </div>
+    <div>
+      <label class="field-label" for="master-tag-filter">タグ</label>
+      <select
+        id="master-tag-filter"
+        class="field-input"
+        [value]="tagFilter()"
+        (change)="onTagFilterChange($event)"
+      >
+        <option value="">すべて</option>
+        @for (tag of tags(); track tag) {
+          <option [value]="tag">{{ tag }}</option>
+        }
+      </select>
+    </div>
+    @if (hasFilter()) {
+      <div class="sm:col-span-3">
+        <button type="button" class="btn btn-secondary" (click)="clearFilters()">
+          絞り込みを解除
+        </button>
+      </div>
+    }
+  </div>
+
+  <p class="mb-3 text-sm text-slate-600" role="status">{{ filtered().length }} 件を表示中</p>
+
+  @if (noMatch()) {
+    <p class="card px-4 py-6 text-center text-sm text-slate-600">
+      条件に一致するオブジェクトはありません。
+    </p>
+  } @else {
+    <ul class="space-y-3">
+      @for (master of filtered(); track master.id) {
+        <li class="card p-4">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div class="flex min-w-0 items-start gap-3">
+              @if (imageFor(master.id); as imageUrl) {
+                <!-- 装飾目的。オブジェクト名が隣にあるため代替テキストは空にする -->
+                <img
+                  [src]="imageUrl"
+                  alt=""
+                  class="h-16 w-16 shrink-0 rounded-md border border-slate-200 bg-slate-100 object-cover"
+                />
+              }
+              <div class="min-w-0">
+                <h2 class="text-base font-semibold">{{ master.name }}</h2>
+                <div class="mt-1 flex flex-wrap items-center gap-1">
+                  @if (master.category) {
+                    <span class="chip">{{ master.category }}</span>
+                  }
+                  @for (tag of master.tags; track tag) {
+                    <span class="chip">#{{ tag }}</span>
+                  }
+                </div>
+                @if (master.note) {
+                  <p class="mt-2 text-sm whitespace-pre-line text-slate-600">{{ master.note }}</p>
+                }
+              </div>
+            </div>
+            <div class="flex shrink-0 gap-2">
+              <app-icon-button
+                icon="edit"
+                [label]="'「' + master.name + '」を編集'"
+                (pressed)="openEdit(master)"
+              />
+              <app-icon-button
+                icon="delete"
+                danger
+                [label]="'「' + master.name + '」を削除'"
+                (pressed)="askDelete(master)"
+              />
+            </div>
+          </div>
+
+          <details class="mt-3 border-t border-slate-200 pt-3">
+            <summary class="cursor-pointer rounded text-sm font-medium text-indigo-800">
+              使用中のケース: {{ usageFor(master.id).length }} 件
+            </summary>
+            @if (usageFor(master.id).length === 0) {
+              <p class="mt-2 text-sm text-slate-600">どのケースでも使われていません。</p>
+            } @else {
+              <ul class="mt-2 space-y-1 text-sm text-slate-700">
+                @for (usage of usageFor(master.id); track usage.caseId) {
+                  <li class="flex justify-between gap-3">
+                    <a
+                      [routerLink]="['/projects', projectId(), 'cases', usage.caseId]"
+                      class="rounded text-indigo-800 hover:underline"
+                    >
+                      {{ usage.caseName }}
+                    </a>
+                    <span>{{ usage.qty }} 個</span>
+                  </li>
+                }
+              </ul>
+            }
+          </details>
+        </li>
+      }
+    </ul>
+  }
+}
+
+<app-modal [(open)]="editorOpen" [heading]="editorHeading()">
+  <form id="master-editor-form" (submit)="$event.preventDefault(); save()">
+    <div class="mb-4">
+      <label class="field-label" for="master-name">オブジェクト名（必須）</label>
+      <input
+        id="master-name"
+        class="field-input"
+        type="text"
+        autocomplete="off"
+        [formField]="editorForm.name"
+        [attr.aria-invalid]="nameError() !== null"
+        [attr.aria-describedby]="nameError() ? 'master-name-error' : null"
+      />
+      @if (nameError(); as message) {
+        <p id="master-name-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      }
+    </div>
+    <div class="mb-4">
+      <label class="field-label" for="master-category">カテゴリ（任意）</label>
+      <input
+        id="master-category"
+        class="field-input"
+        type="text"
+        autocomplete="off"
+        placeholder="武器 / 素材 など"
+        [formField]="editorForm.category"
+        [attr.aria-invalid]="categoryError() !== null"
+        [attr.aria-describedby]="categoryError() ? 'master-category-error' : null"
+      />
+      @if (categoryError(); as message) {
+        <p id="master-category-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      }
+    </div>
+    <div class="mb-4">
+      <label class="field-label" for="master-tags">タグ（任意）</label>
+      <input
+        id="master-tags"
+        class="field-input"
+        type="text"
+        autocomplete="off"
+        placeholder="レア, 換金用（カンマ区切り）"
+        [formField]="editorForm.tags"
+      />
+    </div>
+    <div>
+      <label class="field-label" for="master-note">メモ（任意）</label>
+      <textarea
+        id="master-note"
+        class="field-input"
+        rows="3"
+        [formField]="editorForm.note"
+        [attr.aria-invalid]="noteError() !== null"
+        [attr.aria-describedby]="noteError() ? 'master-note-error' : null"
+      ></textarea>
+      @if (noteError(); as message) {
+        <p id="master-note-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      }
+    </div>
+    <div class="mt-4">
+      <p class="field-label" id="master-image-label">イメージ画像（任意）</p>
+      <div role="group" aria-labelledby="master-image-label">
+        <app-image-picker [(image)]="pendingImage" [enabled]="editorOpen()" />
+      </div>
+    </div>
+  </form>
+  <div modalFooter class="flex justify-end gap-2">
+    <button type="button" class="btn btn-secondary" (click)="editorOpen.set(false)">
+      キャンセル
+    </button>
+    <button type="submit" form="master-editor-form" class="btn btn-primary" [disabled]="busy()">
+      保存
+    </button>
+  </div>
+</app-modal>
+
+<app-confirm-dialog
+  [(open)]="deleteOpen"
+  heading="オブジェクトを削除しますか？"
+  [message]="'「' + (deleteTarget()?.name ?? '') + '」を削除します。使用中のものは削除できません。'"
+  confirmLabel="オブジェクトを削除する"
+  (confirmed)="confirmDelete()"
+/>

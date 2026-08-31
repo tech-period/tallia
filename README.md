@@ -1,59 +1,109 @@
 # Tallia
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.1.5.
+ゲームのタイトルごとに、ゲーム内オブジェクト（アイテム、素材、モンスターなど）の
+所持数・配置状況を記録するための個人用メモツールです。
 
-## Development server
+- 認証なし・サーバーなしの静的サイト。外部への通信は一切行いません
+- データはすべて利用者のブラウザ内（IndexedDB）に保存されます
+- PWA としてインストールでき、完全オフラインで全機能が動作します
 
-To start a local development server, run:
+詳細な仕様は [docs/design.md](docs/design.md) を参照してください。
 
-```bash
-ng serve
+## データモデル
+
+```
+Project（ゲームタイトル）
+  ├─ ProjectImage（イメージ画像。1 プロジェクトにつき 1 枚）
+  ├─ Master（そのタイトルに登場するオブジェクトの定義）
+  │     └─ MasterImage（イメージ画像。1 オブジェクトにつき 1 枚）
+  └─ Case（記録の単位：ダンジョン、章、周回など）
+        └─ Instance（そのケースに何がいくつあるか）
 ```
 
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
+Instance は数量型です。同一ケース内の同一マスターは 1 レコードに集約され、`qty` で数を持ちます。
 
-## Code scaffolding
+## 画面構成
 
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
-
-```bash
-ng generate component component-name
+```
+プロジェクト一覧
+  └─ プロジェクトメニュー（カード全体をタップして入る）
+       ├─ 記録一覧                    … ケースを開くと中の記録が並ぶ
+       │     └─ ケース詳細            … 個数の追加・増減・削除
+       ├─ ケースマスタ                … ケースの追加・並べ替え・削除
+       └─ オブジェクトマスタ          … オブジェクトの追加・編集・削除
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+- プロジェクトとオブジェクトの編集・削除はアイコンボタンです。指で押せるよう 44px 角を確保しています
+- プロジェクトカードは全面がメニューへのリンクで、アイコンボタンはその手前に重ねています
+- ケースの展開ビューは、開かれたケースの中身だけを `by-case` インデックスで読み込みます
 
-```bash
-ng generate --help
+## イメージ画像
+
+プロジェクトとオブジェクトに、それぞれイメージ画像を 1 枚ずつ設定できます（各作成・編集ダイアログから）。
+オブジェクトの画像は、オブジェクトマスタ・記録一覧・ケース詳細にサムネイルとして並びます。
+
+- Web の画像検索などで画像をコピーし、そのまま **Ctrl + V（Mac は ⌘ + V）** で貼り付けられます。ドラッグ&ドロップとファイル選択にも対応しています
+- 取り込んだ画像は最長辺 960px に縮小し、WebP（未対応環境では JPEG / PNG）へ再圧縮してから保存します
+- 画像は `projectImages` / `masterImages` ストアに `ArrayBuffer` として保存します。一覧表示で毎回読み込まずに済むよう、本体とは別ストアに分けています
+- オブジェクトの画像は `by-project` インデックスで表示中のプロジェクト分だけを読み込みます
+- 画像そのものではなく URL だけがコピーされている場合は取り込みません（外部への通信を行わない方針のため）
+
+## アーキテクチャ
+
+```
+Component（表示・入力のみ）
+    ↓
+Service（業務ロジック、整合性ルール、状態管理）
+    ↓
+Repository（IndexedDB の CRUD のみ）
+    ↓
+IndexedDB
 ```
 
-## Building
+- Component から Repository は直接呼びません
+- Repository は業務ルールを持たず、Angular API も `@Injectable()` 以外は使いません
+- カスケード削除やインポートのトランザクション境界は Service 層が持ちます
 
-To build the project run:
+主なディレクトリ:
 
-```bash
-ng build
-```
+| パス                         | 役割                                                          |
+| ---------------------------- | ------------------------------------------------------------- |
+| `src/app/core/db/`           | 型定義（`schema.ts`）と `openDB` / `upgrade`（`database.ts`） |
+| `src/app/core/repositories/` | 各ストアの永続化                                              |
+| `src/app/core/services/`     | 整合性ルール、状態管理、バックアップ、更新検知                |
+| `src/app/features/`          | 画面（遅延ロード）                                            |
+| `src/app/shared/`            | 共通コンポーネントとユーティリティ                            |
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
-
-## Running unit tests
-
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
-
-```bash
-ng test
-```
-
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
+## 開発
 
 ```bash
-ng e2e
+npm install
+npm start        # http://localhost:4200/
+npm test         # vitest + fake-indexeddb
+npm run build    # 本番ビルド
 ```
 
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
+Service Worker は本番ビルドでのみ有効です。オフライン動作を確認する場合は
+`npm run build:pages` の出力を静的サーバーで配信してください。
 
-## Additional Resources
+## デプロイ
 
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+`main` への push で `.github/workflows/deploy.yml` が GitHub Pages へデプロイします。
+
+- ビルドは `ng build --base-href /tallia/`（プロジェクトサイトのサブパス配信に合わせる）
+- ルーティングは `HashLocationStrategy`。404.html の用意は不要です
+- 出力ディレクトリ直下に `.nojekyll` を置き、`_` 始まりのファイルが無視されるのを防ぎます
+
+リポジトリ側で **Settings → Pages → Source** を「GitHub Actions」に設定してください。
+
+## バックアップ
+
+設定画面から JSON のエクスポート / インポートができます。
+
+| モード | 挙動                                                                 |
+| ------ | -------------------------------------------------------------------- |
+| 追加   | すべての ID を新規採番し直し、別プロジェクトとして追加します         |
+| 置換   | 既存の全データを削除してからファイルの内容を投入します（二段階確認） |
+
+ファイル形式は `format: "tallia-backup"` と `version` を持ち、読み込み時に必ず検証されます。
+現行の形式は `version: 3` です。旧形式（`1`: 画像なし / `2`: プロジェクトの画像のみ）もそのまま読み込めます。

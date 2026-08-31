@@ -1,0 +1,145 @@
+<app-error-banner [message]="error()" (dismissed)="error.set(null)" />
+
+<div class="mb-5 flex flex-wrap items-center justify-between gap-3">
+  <div class="flex items-center gap-1">
+    <h1 class="text-2xl font-bold tracking-tight">プロジェクト</h1>
+    <app-info-hint
+      label="プロジェクトの説明"
+      text="ゲームタイトルごとの記録のまとまりです。中にケース（記録の単位）とオブジェクト（アイテムなどの定義）を持ちます。"
+    />
+  </div>
+  <button type="button" class="btn btn-primary" (click)="openCreate()">プロジェクトを作成</button>
+</div>
+
+@if (!loaded()) {
+  <p class="text-sm text-slate-600" role="status">読み込み中です…</p>
+} @else if (isEmpty()) {
+  <app-empty-state
+    heading="まだプロジェクトがありません"
+    description="ゲームタイトルごとに記録をまとめます。"
+  >
+    <button type="button" class="btn btn-primary" (click)="openCreate()">
+      最初のプロジェクトを作成
+    </button>
+  </app-empty-state>
+} @else {
+  <ul class="grid gap-4 sm:grid-cols-2">
+    @for (project of all(); track project.id) {
+      <!-- カード全体を選択領域にするため、見出しのリンクを ::after でカード全面へ広げている -->
+      <li class="card relative flex flex-col gap-3 overflow-hidden">
+        @if (imageFor(project.id); as imageUrl) {
+          <!-- 装飾目的。名前が隣にあるため代替テキストは空にする -->
+          <img
+            [src]="imageUrl"
+            alt=""
+            class="h-32 w-full border-b border-slate-200 bg-slate-100 object-cover"
+          />
+        }
+        <div class="px-4 pt-1">
+          <h2 class="text-lg font-semibold">
+            <a
+              [routerLink]="['/projects', project.id]"
+              class="rounded text-indigo-800 after:absolute after:inset-0 after:content-[''] hover:underline"
+            >
+              {{ project.name }}
+            </a>
+          </h2>
+          @if (project.note) {
+            <p class="mt-1 text-sm whitespace-pre-line text-slate-600">{{ project.note }}</p>
+          }
+        </div>
+        <div class="mt-auto flex items-end justify-between gap-3 px-4 pb-4">
+          <dl class="flex gap-4 text-sm text-slate-700">
+            <div class="flex gap-1">
+              <dt>ケース</dt>
+              <dd class="font-semibold">{{ statsFor(project.id).caseCount }}</dd>
+            </div>
+            <div class="flex gap-1">
+              <dt>オブジェクト</dt>
+              <dd class="font-semibold">{{ statsFor(project.id).masterCount }}</dd>
+            </div>
+          </dl>
+          <!-- カード全面のリンクより手前に置く -->
+          <div class="relative z-10 flex shrink-0 gap-2">
+            <app-icon-button
+              icon="edit"
+              [label]="'「' + project.name + '」を編集'"
+              (pressed)="openEdit(project)"
+            />
+            <app-icon-button
+              icon="delete"
+              danger
+              [label]="'「' + project.name + '」を削除'"
+              (pressed)="askDelete(project)"
+            />
+          </div>
+        </div>
+      </li>
+    }
+  </ul>
+}
+
+<app-modal [(open)]="editorOpen" [heading]="editorHeading()">
+  <form (submit)="$event.preventDefault(); save()" id="project-editor-form">
+    <div class="mb-4">
+      <label class="field-label" for="project-name">プロジェクト名（必須）</label>
+      <input
+        id="project-name"
+        class="field-input"
+        type="text"
+        autocomplete="off"
+        [formField]="editorForm.name"
+        [attr.aria-invalid]="nameError() !== null"
+        [attr.aria-describedby]="nameError() ? 'project-name-error' : null"
+      />
+      @if (nameError(); as message) {
+        <p id="project-name-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      }
+    </div>
+    <div>
+      <label class="field-label" for="project-note">メモ（任意）</label>
+      <textarea
+        id="project-note"
+        class="field-input"
+        rows="3"
+        [formField]="editorForm.note"
+        [attr.aria-invalid]="noteError() !== null"
+        [attr.aria-describedby]="noteError() ? 'project-note-error' : null"
+      ></textarea>
+      @if (noteError(); as message) {
+        <p id="project-note-error" class="mt-1 text-sm text-red-800">{{ message }}</p>
+      }
+    </div>
+    <div class="mt-4">
+      <div class="mb-1 flex items-center gap-1">
+        <p class="field-label mb-0" id="project-image-label">イメージ画像（任意）</p>
+        <app-info-hint
+          label="イメージ画像の説明"
+          text="貼り付け・ドラッグ＆ドロップ・ファイル選択で 1 枚設定できます。取り込んだ画像は縮小・再圧縮してブラウザ内に保存します。"
+        />
+      </div>
+      <div role="group" aria-labelledby="project-image-label">
+        <app-image-picker [(image)]="pendingImage" [enabled]="editorOpen()" />
+      </div>
+    </div>
+  </form>
+  <div modalFooter class="flex justify-end gap-2">
+    <button type="button" class="btn btn-secondary" (click)="editorOpen.set(false)">
+      キャンセル
+    </button>
+    <button type="submit" form="project-editor-form" class="btn btn-primary" [disabled]="busy()">
+      保存
+    </button>
+  </div>
+</app-modal>
+
+<app-confirm-dialog
+  [(open)]="deleteOpen"
+  heading="プロジェクトを削除しますか？"
+  [message]="
+    '「' + (deleteTarget()?.name ?? '') + '」と配下のデータをすべて削除します。取り消せません。'
+  "
+  [details]="deleteDetails()"
+  confirmLabel="すべて削除する"
+  (confirmed)="confirmDelete()"
+/>

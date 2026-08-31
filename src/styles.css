@@ -1,3 +1,84 @@
-/* You can add global styles to this file, and also import other style files */
-
 @import 'tailwindcss';
+
+@theme {
+  --font-sans:
+    'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', Meiryo, sans-serif;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html {
+    height: 100%;
+  }
+
+  body {
+    @apply min-h-full bg-slate-100 font-sans text-slate-900 antialiased;
+  }
+
+  /* キーボード操作時のフォーカスを常に視認できるようにする */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-indigo-700;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply border-indigo-700 bg-indigo-700 text-white hover:bg-indigo-800 disabled:hover:bg-indigo-700;
+  }
+
+  .btn-secondary {
+    @apply border-slate-300 bg-white text-slate-800 hover:bg-slate-50;
+  }
+
+  .btn-danger {
+    @apply border-red-700 bg-red-700 text-white hover:bg-red-800 disabled:hover:bg-red-700;
+  }
+
+  .btn-ghost {
+    @apply border-transparent bg-transparent text-slate-700 hover:bg-slate-200;
+  }
+
+  .btn-icon {
+    @apply inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  /* スマホでも指で押せるよう 44px 角を確保したアイコンボタン */
+  .btn-icon-lg {
+    @apply inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-icon-danger {
+    @apply border-red-200 text-red-800 hover:border-red-300 hover:bg-red-50;
+  }
+
+  .btn-info {
+    @apply inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-slate-600 transition-colors hover:bg-slate-200 hover:text-slate-900 aria-expanded:bg-slate-200 aria-expanded:text-slate-900;
+  }
+
+  .field-label {
+    @apply mb-1 block text-sm font-medium text-slate-800;
+  }
+
+  .field-input {
+    @apply block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-500 aria-[invalid=true]:border-red-700;
+  }
+
+  .card {
+    @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+  }
+
+  .chip {
+    @apply inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700;
+  }
+}

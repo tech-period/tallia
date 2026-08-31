@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# 同じブランチ / PR で新しい push があれば古い実行は打ち切る
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Build / Test / Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # フォーマット崩れの検出（ESLint は未導入）
+      - name: Format check
+        run: npm run format:check
+
+      - name: Test
+        run: npm run test:ci
+
+      # 本番構成でのビルドが通ることを確認する
+      - name: Build
+        run: npm run build
