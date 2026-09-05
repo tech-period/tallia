@@ -1,10 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
-    branches: [main]
   workflow_dispatch:
 
 # 同じブランチ / PR で新しい push があれば古い実行は打ち切る
